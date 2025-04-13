@@ -48,19 +48,19 @@ class TrainPipelineNN(TrainPipeline):
         plt.savefig('loss_plot.png')
         plt.close()
     
-    def validate(self, val_loader, criterion):
+    def validate(self, criterion):
         self.model.eval()
         total_loss = 0
         
         with torch.no_grad():
-            for batch_X, batch_y in val_loader:
+            for batch_X, batch_y in self.val_loader:
                 batch_X = batch_X.to(self.device)
                 batch_y = batch_y.to(self.device)
                 outputs = self.model(batch_X)
                 loss = criterion(outputs, batch_y)
                 total_loss += loss.item()
                 
-        return total_loss / len(val_loader)
+        return total_loss / len(self.val_loader)
     
     def train(self):
         if torch.backends.mps.is_available():

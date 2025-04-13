@@ -19,3 +19,9 @@ class ProjectPaths(BaseModel):
     arabic_data_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[1] / "data" / "arabic")
 
     model_config = ConfigDict(frozen=True)
+    
+
+    
+
+
+    
