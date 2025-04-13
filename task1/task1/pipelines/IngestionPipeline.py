@@ -15,12 +15,15 @@ class IngestionPipeline:
         self.load_data()
         
     
-    def run(self):
+    def run(self, save_embeddings : bool = True):
         self.train_data = self.preprocess_data(self.train_data)
         self.val_data = self.preprocess_data(self.val_data)
         self.test_data = self.preprocess_data(self.test_data)
         
         # Save train data
+        if not save_embeddings:
+            return
+        
         pd.DataFrame({
             "embedding": self.train_data[0].tolist(),  # Convert numpy array to list
             "label": self.train_data[1]

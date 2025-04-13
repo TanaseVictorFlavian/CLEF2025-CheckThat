@@ -1,54 +1,54 @@
-from typing import Optional, Dict, Any
-from pathlib import Path
-from .BasePipeline import BasePipeline
 from task1.config import ProjectPaths
+import pandas as pd
+from task1.pipelines.IngestionPipeline import IngestionPipeline
+from sentence_transformers import SentenceTransformer
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
+from typing import Tuple, Optional, Any
+from abc import ABC, abstractmethod
 
-class TrainPipeline(BasePipeline):
-    """Pipeline for training models on specific languages."""
+
+class TrainPipeline():
     
     def __init__(
-        self,
-        language: str,
-        config: ProjectPaths,
-        model_config: Optional[Dict[str, Any]] = None,
-        train_config: Optional[Dict[str, Any]] = None
+        self, 
+        language: str, 
+        model: Any, 
+        data_path = None, 
+        data: IngestionPipeline = None,
+        batch_size: int = 128,
     ):
-        """
-        Initialize the training pipeline.
+        self.language = language
+        self.model = model
+        self.data_path = data_path
+        self.data = data
+        self.batch_size = batch_size
+        self.train_loader = None
+        self.val_loader = None
+    
+    def unpack_data(self):
+        # Unpack data from parquet files
+        self.train_data = pd.read_parquet(self.data_path / f"train_{self.language}_embeddings.parquet") 
+        self.val_data = pd.read_parquet(self.data_path / f"dev_{self.language}_embeddings.parquet")
         
-        Args:
-            language: The language code (e.g., 'english', 'german')
-            config: Project configuration containing paths
-            model_config: Optional configuration for the model
-            train_config: Optional configuration for training parameters
-        """
-        super().__init__(language, config, model_config)
-        self.train_config = train_config or {}
-        self.model = None
-        self.train_data = None
-        self.val_data = None
+    def split_data(self):
+        if self.data is None:
+            self.unpack_data()
+            
+        # Convert embeddings from lists to numpy arrays
+        self.X_train = np.array(self.train_data["embedding"].tolist())
+        self.y_train = self.train_data["label"].values
+        self.X_val = np.array(self.val_data["embedding"].tolist())
+        self.y_val = self.val_data["label"].values
         
-    def load_data(self) -> None:
-        """Load and preprocess training and validation data."""
-        # Implement data loading logic here
+    @abstractmethod
+    def train(self):
         pass
-        
-    def prepare_model(self) -> None:
-        """Initialize and prepare the model for training."""
-        # Implement model preparation logic here
+    
+    @abstractmethod
+    def run(self):
         pass
+
         
-    def run(self) -> Dict[str, Any]:
-        """Run the training pipeline and return results."""
-        self.load_data()
-        self.prepare_model()
+
         
-        # Implement training logic here
-        results = {
-            "language": self.language,
-            "model_config": self.model_config,
-            "train_config": self.train_config,
-            # Add training results here
-        }
-        
-        return results
