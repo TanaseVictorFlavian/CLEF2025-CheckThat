@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from typing import Tuple, Any
 import torch
+import random
 from torch.utils.data import TensorDataset
 from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -11,6 +12,9 @@ import torch.nn.functional as F
 import json
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from datetime import datetime
+
+from task1.config import ProjectPaths
 
 
 class IngestionPipeline:
@@ -89,12 +93,22 @@ class TrainPipeline:
         self.batch_size = batch_size
         self.train_loader = None
         self.val_loader = None
+        self.train_data = None
+        self.val_data = None
+        self.split_data()
+        self.random_seed = 42
+        self.set_random_seeds()
 
     def unpack_data(self):
         # Unpack data from parquet files
+        
+        print(f"Loading training data from : {self.data_path / f'train_{self.language}_embeddings.parquet'}")
+        
         self.train_data = pd.read_parquet(
             self.data_path / f"train_{self.language}_embeddings.parquet"
         )
+        
+        print(f"Loading validation data from : {self.data_path / f'dev_{self.language}_embeddings.parquet'}")
         self.val_data = pd.read_parquet(
             self.data_path / f"dev_{self.language}_embeddings.parquet"
         )
@@ -116,17 +130,29 @@ class TrainPipeline:
     @abstractmethod
     def run(self):
         pass
+    
+    @abstractmethod
+    def set_random_seeds(self):
+        pass
 
 class TrainPipelineNN(TrainPipeline):
-    def __init__(self, model, data_path, data, batch_size=128, model_hyperparams: dict = None):
-        super().__init__(model, data_path, data, batch_size)
-        self.hyperparams = model_hyperparams
+    def __init__(self, language, model, data_path, data=None, batch_size=128, model_hyperparams=None):
+        super().__init__(language, model, data_path, data, batch_size)
+        if model_hyperparams is None:
+            self.hyperparams = {}
+        else:
+            self.hyperparams = model_hyperparams
         self.train_losses = []
         self.val_losses = []
         
+    def set_random_seeds(self):
+        torch.manual_seed(self.random_seed)
+        np.random.seed(self.random_seed)
+        random.seed(self.random_seed)
+        
+
     def create_data_loaders(self):
         """Create PyTorch DataLoaders for training and validation."""
-        self.split_data()
         self.X_train = torch.Tensor(self.X_train)
         self.y_train = torch.Tensor(self.y_train)
         self.X_val = torch.Tensor(self.X_val)
@@ -167,7 +193,7 @@ class TrainPipelineNN(TrainPipeline):
         with torch.no_grad():
             for batch_X, batch_y in self.val_loader:
                 batch_X = batch_X.to(self.device)
-                batch_y = batch_y.to(self.device)
+                batch_y = batch_y.unsqueeze(1).to(self.device)
                 outputs = self.model(batch_X)
                 loss = criterion(outputs, batch_y)
                 total_loss += loss.item()
@@ -181,12 +207,26 @@ class TrainPipelineNN(TrainPipeline):
             self.device = torch.device("cpu")
         
         self.model.to(self.device)
-        epochs = self.hyperparams["epochs"]
-        lr = self.hyperparams["lr"]
-        weight_decay = self.hyperparams["weight_decay"]
-        loss_fn = torch.nn.CrossEntropyLoss()
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         
+        if self.hyperparams:
+            epochs = self.hyperparams["epochs"]
+            lr = self.hyperparams["lr"]
+            weight_decay = self.hyperparams["weight_decay"]
+            loss_fn = torch.nn.BCELoss()
+            optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+
+        else:
+            epochs = 5
+            lr = 3e-4
+            loss_fn = torch.nn.BCEWithLogitsLoss()
+            weight_decay = 0
+            optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+
+            self.hyperparams["epochs"] = epochs
+            self.hyperparams["lr"] = lr
+            self.hyperparams["weight_decay"] = weight_decay
+            self.hyperparams["optimizer"] = "Adam"
+
         print(f"Training running on: {self.device}")
         
         for epoch in tqdm(range(epochs), desc="Training"):
@@ -194,8 +234,9 @@ class TrainPipelineNN(TrainPipeline):
             self.model.train()
             train_loss = 0.0
             for batch_X, batch_y in self.train_loader:
+                
                 batch_X = batch_X.to(self.device)
-                batch_y = batch_y.to(self.device)
+                batch_y = batch_y.unsqueeze(1).to(self.device)
                 
                 optimizer.zero_grad()
                 outputs = self.model(batch_X)
@@ -206,7 +247,7 @@ class TrainPipelineNN(TrainPipeline):
                 train_loss += loss.item()
             
             # Validation phase
-            val_loss = self.validate(self.val_loader, loss_fn)
+            val_loss = self.validate(loss_fn)
             
             # Store losses
             self.train_losses.append(train_loss / len(self.train_loader))
@@ -230,10 +271,12 @@ class TrainPipelineNN(TrainPipeline):
 
 
 class MasterPipeline:
-    def __init__(self, config,  ingestion_pipeline, training_pipeline, evaluation_pipeline):
+    def __init__(self, config,  paths : ProjectPaths, ingestion_pipeline, training_pipeline, evaluation_pipeline):
+        self.paths = paths
         self.ingestion_pipeline = ingestion_pipeline
         self.training_pipeline = training_pipeline
         self.evaluation_pipeline = evaluation_pipeline
+        self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         
     
     def run(self, save_run_info: bool = True):
@@ -244,17 +287,17 @@ class MasterPipeline:
         run_info =self.log_run()
         
         if save_run_info:
-            with open(self.config.run_info_path, "w") as f:
+            with open(self.paths.run_info_path / f"run_{self.timestamp}.json", "w") as f:
                 json.dump(run_info, f)
             
     def log_run(self):
-        run_info = {}
-        run_info["language"] = self.ingestion_pipeline.language
-        run_info["hyperparams"] = self.training_pipeline.hyperparams
-        run_info["model_arch"] = self.training_pipeline.model.get_architecture()
-        run_info["stats"] = self.evaluation_pipeline.get_stats()
+        run_info = {
+            "language": self.ingestion_pipeline.language,
+            "hyperparams": self.training_pipeline.hyperparams,
+            "model_arch": self.training_pipeline.model.get_architecture(),
+            "stats": self.evaluation_pipeline.get_stats()
+        }
 
-        
         return run_info
         
 class EvaluationPipeline(ABC):
@@ -267,10 +310,12 @@ class EvaluationPipeline(ABC):
         self.language = language
         self.batch_size = batch_size
         self.test_loader = None
-
+    
     def unpack_data(self):
         # Unpack data from parquet files
-        self.test_data = pd.read_parquet(self.data_path / f"dev_test_{self.language}_embeddings.parquet")
+        self.test_data = pd.read_parquet(
+            self.data_path / f"dev_test_{self.language}_embeddings.parquet"
+        )
 
     def split_data(self):
         if self.data is None:
@@ -284,8 +329,12 @@ class EvaluationPipeline(ABC):
         pass
     
 class EvaluationPipelineNN(EvaluationPipeline):
-    def __init__(self, model, paths: Path, data):
-        super().__init__(model, paths, data)
+    def __init__(self, model, data_path, data):
+        super().__init__(model, data_path, data)
+        if torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
 
     def create_data_loaders(self):
         self.split_data()
@@ -300,7 +349,7 @@ class EvaluationPipelineNN(EvaluationPipeline):
             shuffle=True,
             pin_memory=True
         )
-        
+
     def compute_metrics(self, y_pred):
         self.accuracy = accuracy_score(self.y_test, y_pred)
         self.precision = precision_score(self.y_test, y_pred)
@@ -315,30 +364,30 @@ class EvaluationPipelineNN(EvaluationPipeline):
     def get_predictions(self, logits):
         return [1 if logit > 0.5 else 0 for logit in F.sigmoid(logits)]
     
-    def evaluate_model(self, criterion):
+    def evaluate_model(self):
         self.model.eval()
-        total_loss = 0
         y_pred = []
     
         with torch.no_grad():
             for batch_X, batch_y in self.test_loader:
                 batch_X = batch_X.to(self.device)
-                batch_y = batch_y.to(self.device)
+                batch_y = batch_y.unsqueeze(1).to(self.device)
                 logits = self.model(batch_X)
-                loss = criterion(logits, batch_y)
-                total_loss += loss.item()
                 y_pred.append(self.get_predictions(logits))
        
-        self.test_loss = total_loss / len(self.test_loader)
-        print(f"Test Loss: {self.test_loss}")
         self.compute_metrics(np.concatenate(y_pred))
         
     def get_stats(self):
         stats = {
-            "test_loss": self.test_loss,
             "accuracy": self.accuracy,
             "precision": self.precision,
             "recall": self.recall,
             "f1": self.f1
         }
         return stats
+
+    def run(self):
+        print("Running evaluation pipeline...")
+        self.create_data_loaders()
+        self.evaluate_model()
+    

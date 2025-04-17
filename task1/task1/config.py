@@ -10,7 +10,7 @@ class ProjectPaths(BaseModel):
 
     base_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[1])
     data_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[1] / "data")
-    
+    checkpoints_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[0] / "model_checkpoints")
     # Language-specific data directories
     english_data_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[1] / "data" / "english")
     german_data_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[1] / "data" / "german")
@@ -18,10 +18,8 @@ class ProjectPaths(BaseModel):
     bulgarian_data_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[1] / "data" / "bulgarian")
     arabic_data_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[1] / "data" / "arabic")
 
+    weights_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[0] / "model_checkpoints" / "weights")
+    run_info_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[0] / "model_checkpoints" / "runs")
+    
     model_config = ConfigDict(frozen=True)
-    
-
-    
-
-
     
