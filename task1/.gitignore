@@ -43,3 +43,11 @@ Thumbs.db
 
 playground.ipynb
 notes.txt
+
+model_checkpoints/plots/*
+model_checkpoints/weights/*
+model_checkpoints/run_info/*
+
+!model_checkpoints/plots/.gitkeep
+!model_checkpoints/weights/.gitkeep
+!model_checkpoints/run_info/.gitkeep
