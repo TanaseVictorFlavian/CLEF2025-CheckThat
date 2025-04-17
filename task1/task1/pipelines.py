@@ -5,7 +5,7 @@ import pandas as pd
 from typing import Tuple, Any
 import torch
 import random
-
+import os
 from sklearn.utils import compute_class_weight
 from torch.utils.data import TensorDataset
 from torch.utils.data import DataLoader
@@ -18,6 +18,10 @@ from datetime import datetime
 
 from sentence_transformers import SentenceTransformer
 from task1.config import ProjectPaths
+
+
+torch.use_deterministic_algorithms(True)
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 class IngestionPipeline:
@@ -210,7 +214,7 @@ class TrainPipelineNN(TrainPipeline):
         # Create generator for reproducibility
         g = torch.Generator()
         g.manual_seed(self.random_seed)
-    
+
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=self.batch_size,
@@ -252,7 +256,6 @@ class TrainPipelineNN(TrainPipeline):
         return total_loss / len(self.val_loader)
 
     def train(self):
-
         if torch.backends.mps.is_available():
             self.device = torch.device("mps")
         else:
@@ -429,6 +432,7 @@ class EvaluationPipelineNN(EvaluationPipeline):
         else:
             self.device = torch.device("cpu")
         self.random_seed = random_seed
+
     def create_data_loaders(self):
         self.split_data()
         X_test = torch.Tensor(self.X_test)
