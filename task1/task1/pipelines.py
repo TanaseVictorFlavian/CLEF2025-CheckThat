@@ -91,6 +91,7 @@ class TrainPipeline:
         data: Any = (None, None),
         batch_size: int = 128,
         use_class_weights: bool = True,
+        random_seed: int = 42,
     ):
         self.language = language
         self.model = model
@@ -100,8 +101,8 @@ class TrainPipeline:
         self.train_loader = None
         self.val_loader = None
         self.train_data, self.val_data = data
+        self.random_seed = random_seed
         self.split_data()
-        self.random_seed = 42
         self.set_random_seeds()
         if use_class_weights:
             self.set_class_weights()
@@ -165,8 +166,11 @@ class TrainPipelineNN(TrainPipeline):
         data=None,
         batch_size=128,
         model_hyperparams=None,
+        random_seed: int = 42,
     ):
-        super().__init__(language, model, data_path, data, batch_size)
+        super().__init__(
+            language, model, data_path, data, batch_size, random_seed=random_seed
+        )
         if model_hyperparams is None:
             self.hyperparams = {}
         else:
@@ -176,9 +180,16 @@ class TrainPipelineNN(TrainPipeline):
         self.class_weights = None
 
     def set_random_seeds(self):
+        """Set random seeds for all relevant libraries."""
         torch.manual_seed(self.random_seed)
         np.random.seed(self.random_seed)
         random.seed(self.random_seed)
+        # Also set cuda seeds if available
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(self.random_seed)
+            torch.cuda.manual_seed_all(self.random_seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
     def set_class_weights(self):
         classes = np.unique(self.y_train)
@@ -196,12 +207,24 @@ class TrainPipelineNN(TrainPipeline):
         train_dataset = TensorDataset(self.X_train, self.y_train)
         val_dataset = TensorDataset(self.X_val, self.y_val)
 
+        # Create generator for reproducibility
+        g = torch.Generator()
+        g.manual_seed(self.random_seed)
+    
         self.train_loader = DataLoader(
-            train_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True
+            train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            generator=g,
         )
 
         self.val_loader = DataLoader(
-            val_dataset, batch_size=self.batch_size, shuffle=False, pin_memory=True
+            val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            pin_memory=True,
+            generator=g,
         )
 
     def plot_losses(self):
@@ -229,6 +252,7 @@ class TrainPipelineNN(TrainPipeline):
         return total_loss / len(self.val_loader)
 
     def train(self):
+
         if torch.backends.mps.is_available():
             self.device = torch.device("mps")
         else:
@@ -340,6 +364,7 @@ class MasterPipeline:
         run_info = {
             "language": self.language,
             "model_arch": self.training_pipeline.model.get_architecture(),
+            "random_seed": self.training_pipeline.random_seed,
             "hyperparams": self.training_pipeline.hyperparams,
             "stats": self.evaluation_pipeline.get_stats(),
         }
@@ -397,13 +422,13 @@ class EvaluationPipeline(ABC):
 
 
 class EvaluationPipelineNN(EvaluationPipeline):
-    def __init__(self, model, data_path, data):
+    def __init__(self, model, data_path, data, random_seed: int = 42):
         super().__init__(model, data_path, data)
         if torch.backends.mps.is_available():
             self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
-
+        self.random_seed = random_seed
     def create_data_loaders(self):
         self.split_data()
         X_test = torch.Tensor(self.X_test)
@@ -411,8 +436,15 @@ class EvaluationPipelineNN(EvaluationPipeline):
 
         test_dataset = TensorDataset(X_test, y_test)
 
+        g = torch.Generator()
+        g.manual_seed(self.random_seed)
+
         self.test_loader = DataLoader(
-            test_dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True
+            test_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            generator=g,
         )
 
     def compute_metrics(self, y_pred):
