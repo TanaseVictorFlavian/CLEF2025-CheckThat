@@ -5,15 +5,15 @@ from .pipelines import (
     TrainPipelineNN,
     MasterPipeline,
     EvaluationPipeline,
-    EvaluationPipelineNN
+    EvaluationPipelineNN,
 )
 
 __all__ = [
-    'pipelines',
-    'IngestionPipeline',
-    'TrainPipeline',
-    'TrainPipelineNN',
-    'MasterPipeline',
-    'EvaluationPipeline',
-    'EvaluationPipelineNN'
+    "pipelines",
+    "IngestionPipeline",
+    "TrainPipeline",
+    "TrainPipelineNN",
+    "MasterPipeline",
+    "EvaluationPipeline",
+    "EvaluationPipelineNN",
 ]
