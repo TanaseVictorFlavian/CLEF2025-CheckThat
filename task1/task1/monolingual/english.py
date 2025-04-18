@@ -1,6 +1,7 @@
 from task1 import pipelines as ppl
 from task1.config import ProjectPaths
 from sentence_transformers import SentenceTransformer
+from sklearn.ensemble import RandomForestClassifier 
 import torch
 from task1.models.MLP import MLP
 import os
@@ -23,13 +24,26 @@ if __name__ == "__main__":
         device=device,
         cache_folder="./cache",  # Add cache folder to avoid permission issues
     )
-
+    """
     classifier = MLP(
         in_features=embedding_model.get_sentence_embedding_dimension(),
         out_features=1,
     )
 
     master_pipeline = ppl.MasterPipeline(
+        paths=paths,
+        data_path=paths.english_data_dir,
+        embedding_model=embedding_model,
+        classifier=classifier,
+        language="en",
+    )
+    """
+    classifier = RandomForestClassifier(
+        n_estimators=100,
+        max_depth=10,
+        random_state=42,
+    )
+    master_pipeline = ppl.MasterPipelineSklearn(
         paths=paths,
         data_path=paths.english_data_dir,
         embedding_model=embedding_model,

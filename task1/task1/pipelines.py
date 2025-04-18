@@ -160,6 +160,73 @@ class TrainPipeline:
     def set_class_weights(self):
         pass
 
+class TrainPipelineSklearn(TrainPipeline):
+    def __init__(
+        self,
+        language,
+        model,
+        data_path,
+        data=None,
+        batch_size=128,
+        model_hyperparams=None,
+        random_seed: int = 42,
+    ):
+        super().__init__(
+            language, model, data_path, data, batch_size, use_class_weights=True, random_seed=random_seed
+        )
+        if model_hyperparams is None:
+            self.hyperparams = {}
+        else:
+            self.hyperparams = model_hyperparams
+        self.train_scores = []
+        self.val_scores = []
+
+    def set_random_seeds(self):
+        np.random.seed(self.random_seed)
+        random.seed(self.random_seed)
+        
+    def set_class_weights(self):
+        classes = np.unique(self.y_train)
+        self.class_weights = compute_class_weight(
+            class_weight="balanced", classes=classes, y=self.y_train
+        )
+        self.class_weight_dict = dict(zip(classes, self.class_weights))
+
+        # Apply class weights to model if supported
+        if hasattr(self.model, "class_weight"):
+            self.model.set_params(class_weight=self.class_weight_dict)
+    
+    def plot_scores(self):
+        self.loss_figure = plt.figure(figsize=(10, 6))
+        plt.plot(self.train_scores, label="Training Accuracy")
+        plt.plot(self.val_scores, label="Validation Accuracy")
+        plt.xlabel("Step")
+        plt.ylabel("Accuracy")
+        plt.title("Training and Validation Accuracy")
+        plt.legend()
+        plt.close()
+
+    def train(self):
+        self.model.fit(self.X_train, self.y_train)
+
+        y_train_pred = self.model.predict(self.X_train)
+        y_val_pred = self.model.predict(self.X_val)
+
+        train_acc = accuracy_score(self.y_train, y_train_pred)
+        val_acc = accuracy_score(self.y_val, y_val_pred)
+
+        self.train_scores.append(train_acc)
+        self.val_scores.append(val_acc)
+
+        print(f"Training Accuracy: {train_acc:.4f}")
+        print(f"Validation Accuracy: {val_acc:.4f}")
+
+        self.plot_scores()
+        print("Training completed!")
+
+    def run(self):
+        self.train()
+    
 
 class TrainPipelineNN(TrainPipeline):
     def __init__(
@@ -423,6 +490,40 @@ class EvaluationPipeline(ABC):
     def evaluate_model(self):
         pass
 
+class EvaluationPipelineSklearn(EvaluationPipeline):
+    def __init__(self, model, data_path, data):
+        super().__init__(model, data_path, data)
+
+    def compute_metrics(self, y_pred):
+        self.accuracy = accuracy_score(self.y_test, y_pred)
+        self.precision = precision_score(self.y_test, y_pred)
+        self.recall = recall_score(self.y_test, y_pred)
+        self.f1 = f1_score(self.y_test, y_pred)
+
+        print(f"Accuracy: {self.accuracy:.4f}")
+        print(f"Precision: {self.precision:.4f}")
+        print(f"Recall: {self.recall:.4f}")
+        print(f"F1 Score: {self.f1:.4f}")
+
+    def evaluate_model(self):
+        self.split_data()
+
+        print("Evaluating sklearn model...")
+        y_pred = self.model.predict(self.X_test)
+
+        self.compute_metrics(y_pred)
+
+    def get_stats(self):
+        return {
+            "accuracy": self.accuracy,
+            "precision": self.precision,
+            "recall": self.recall,
+            "f1": self.f1,
+        }
+
+    def run(self):
+        self.evaluate_model()
+
 
 class EvaluationPipelineNN(EvaluationPipeline):
     def __init__(self, model, data_path, data, random_seed: int = 42):
@@ -491,3 +592,50 @@ class EvaluationPipelineNN(EvaluationPipeline):
         print("Running evaluation pipeline...")
         self.create_data_loaders()
         self.evaluate_model()
+
+
+class MasterPipelineSklearn:
+    def __init__(
+        self,
+        paths: ProjectPaths,
+        data_path: Path,
+        embedding_model: SentenceTransformer,
+        classifier: Any,
+        language: str,
+    ):
+        self.paths = paths
+        self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.ingestion_pipeline = IngestionPipeline(
+            data_path=data_path, language=language, embedding_model=embedding_model
+        )
+        self.data_path = data_path
+        self.language = language
+        self.classifier = classifier
+
+    def run(self, save_run_info: bool = True):
+        self.ingestion_pipeline.run()
+        self.training_pipeline = TrainPipelineSklearn(
+            language=self.language,
+            model=self.classifier,
+            data_path=self.data_path,
+            data=(self.ingestion_pipeline.train_data, self.ingestion_pipeline.val_data),
+        )
+        self.training_pipeline.run()
+        self.evaluation_pipeline = EvaluationPipelineSklearn(
+            model=self.training_pipeline.model,
+            data_path=self.data_path,
+            data=self.ingestion_pipeline.test_data,
+        )
+        self.evaluation_pipeline.run()
+        self.log_run()
+
+    def log_run(self, save_run_info: bool = True):
+        run_info = {
+            "language": self.language,
+            "model_type": self.training_pipeline.model.__class__.__name__,
+            "random_seed": self.training_pipeline.random_seed,
+            "hyperparams": self.training_pipeline.model.get_params(),
+            "stats": self.evaluation_pipeline.get_stats(),
+        }
+        print(run_info)
+    
