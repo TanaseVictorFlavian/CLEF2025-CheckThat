@@ -5,50 +5,42 @@ from sklearn.ensemble import RandomForestClassifier
 import torch
 from task1.models.MLP import MLP
 import os
-
+from task1.models.encoders import SentenceTransformerEncoder, Word2VecEncoder
 
 torch.use_deterministic_algorithms(True)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-
 if __name__ == "__main__":
     paths = ProjectPaths()
 
-    # Check if MPS is available and set device accordingly
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    # Initialize the model with explicit device handling
-    embedding_model = SentenceTransformer(
-        "all-MiniLM-L6-v2",
-        device=device,
-        cache_folder="./cache",  # Add cache folder to avoid permission issues
-    )
-    """
+    encoder = SentenceTransformerEncoder(model_name="all-MiniLM-L6-v2")
+
     classifier = MLP(
-        in_features=embedding_model.get_sentence_embedding_dimension(),
-        out_features=1,
+        in_features=encoder.get_emb_dim(),
+        out_features=1
     )
 
     master_pipeline = ppl.MasterPipeline(
-        paths=paths,
-        data_path=paths.english_data_dir,
-        embedding_model=embedding_model,
+        encoder=encoder,
         classifier=classifier,
-        language="en",
+        language="english",
     )
-    """
-    classifier = RandomForestClassifier(
-        n_estimators=100,
-        max_depth=10,
-        random_state=42,
-    )
-    master_pipeline = ppl.MasterPipelineSklearn(
-        paths=paths,
-        data_path=paths.english_data_dir,
-        embedding_model=embedding_model,
-        classifier=classifier,
-        language="en",
-    )
+
+
+    # classifier = RandomForestClassifier(
+    #     n_estimators=100,
+    #     max_depth=10,
+    #     random_state=42,
+    # )
+    # master_pipeline = ppl.MasterPipelineSklearn(
+    #     paths=paths,
+    #     data_path=paths.english_data_dir,
+    #     embedding_model=embedding_model,
+    #     classifier=classifier,
+    #     language="en",
+    # )
 
     master_pipeline.run()

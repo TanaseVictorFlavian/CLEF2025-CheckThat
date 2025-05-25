@@ -19,55 +19,76 @@ from datetime import datetime
 from sentence_transformers import SentenceTransformer
 from task1.config import ProjectPaths
 
+from task1.models.encoders import Encoder
+
 
 torch.use_deterministic_algorithms(True)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+paths = ProjectPaths()
 
 class IngestionPipeline:
-    def __init__(self, data_path: Path, language: str, embedding_model):
-        self.data_path = data_path
+    def __init__(self, language: list[str], encoder: Encoder):
         self.language = language
         self.train_data = None
         self.val_data = None
         self.test_data = None
-        self.embedding_model = embedding_model
+        self.encoder = encoder
         self.load_data()
 
     def run(self, save_embeddings: bool = True):
         print("Running embedding model ...")
-        self.train_data = self.preprocess_data(self.train_data)
-        self.val_data = self.preprocess_data(self.val_data)
-        self.test_data = self.preprocess_data(self.test_data)
+        self.train_data = self.encode_data(self.train_data)
+
+        if self.encoder.model_name == "tfidf":
+            vectorizer = self.encoder.model
+            self.val_data = vectorizer.transform(self.val_data).toarray()
+            self.test_data = vectorizer.transform(self.test_data).toarray()
+       
+        else:
+            self.val_data = self.encode_data(self.val_data)
+            self.test_data = self.encode_data(self.test_data)
 
         # Save train data
         if not save_embeddings:
             return
+        
+        # Create directory if it doesn't exist
+        output_dir = paths.embeddings_dir / self.language / self.encoder.model_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
         pd.DataFrame(self.train_data).to_parquet(
-            self.data_path / f"train_{self.language}_embeddings.parquet", index=False
-        )
-        # Save validation data
-        pd.DataFrame(self.val_data).to_parquet(
-            self.data_path / f"dev_{self.language}_embeddings.parquet", index=False
+            output_dir / "train.parquet", index=False
         )
 
-        # Save test data
+        pd.DataFrame(self.val_data).to_parquet(
+            output_dir / "dev.parquet", index=False
+        )
+
         pd.DataFrame(self.test_data).to_parquet(
-            self.data_path / f"dev_test_{self.language}_embeddings.parquet", index=False
+            output_dir / "test.parquet", index=False
         )
 
     def load_data(self):
+        splits = os.listdir(paths.data_dir / self.language)
+        train, val, test = splits[3], splits[0], splits[1]
+
+        print(f"Loading training data from : {paths.data_dir / self.language / train}")
         self.train_data = pd.read_csv(
-            self.data_path / f"train_{self.language}.tsv", sep="\t"
-        )
-        self.val_data = pd.read_csv(
-            self.data_path / f"dev_{self.language}.tsv", sep="\t"
-        )
-        self.test_data = pd.read_csv(
-            self.data_path / f"dev_test_{self.language}.tsv", sep="\t"
+            paths.data_dir / self.language / train, sep="\t"
         )
 
-    def preprocess_data(self, data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+        print(f"Loading validation data from : {paths.data_dir / self.language / val}")
+        self.val_data = pd.read_csv(
+            paths.data_dir / self.language / val, sep="\t"
+        )
+
+        print(f"Loading test data from : {paths.data_dir / self.language / test}")
+        self.test_data = pd.read_csv(
+            paths.data_dir / self.language / test, sep="\t"
+        )
+
+    def encode_data(self, data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """
         Preprocess the data by getting embeddings and mapping labels to binary values.
 
@@ -78,7 +99,7 @@ class IngestionPipeline:
             tuple: (embeddings, binary_labels)
         """
         # Get embeddings from sentences
-        embeddings = self.embedding_model.encode(data["sentence"].values)
+        embeddings = self.encoder.encode(data["sentence"].values)
 
         # Map labels to binary values (OBJ -> 0, SUBJ -> 1)
         binary_labels = np.where(data["label"].values == "SUBJ", 1, 0)
@@ -91,15 +112,14 @@ class TrainPipeline:
         self,
         language: str,
         model: Any,
-        data_path=None,
         data: Any = (None, None),
         batch_size: int = 128,
         use_class_weights: bool = True,
         random_seed: int = 42,
+        encoder: Encoder = None,
     ):
         self.language = language
         self.model = model
-        self.data_path = data_path
         self.data = data
         self.batch_size = batch_size
         self.train_loader = None
@@ -108,6 +128,7 @@ class TrainPipeline:
         self.random_seed = random_seed
         self.split_data()
         self.set_random_seeds()
+        self.encoder = encoder
         if use_class_weights:
             self.set_class_weights()
         else:
@@ -117,18 +138,18 @@ class TrainPipeline:
         if self.data is None:
             # Unpack data from parquet files
             print(
-                f"Loading training data from : {self.data_path / f'train_{self.language}_embeddings.parquet'}"
+                f"Loading training data from : {paths.embeddings_dir / self.language / self.encoder.model_name / 'train.parquet'}"
             )
 
             self.train_data = pd.read_parquet(
-                self.data_path / f"train_{self.language}_embeddings.parquet"
+                paths.embeddings_dir / self.language / self.encoder.model_name / "train.parquet"
             )
 
             print(
-                f"Loading validation data from : {self.data_path / f'dev_{self.language}_embeddings.parquet'}"
+                f"Loading validation data from : {paths.embeddings_dir / self.language / self.encoder.model_name / 'dev.parquet'}"
             )
             self.val_data = pd.read_parquet(
-                self.data_path / f"dev_{self.language}_embeddings.parquet"
+                paths.embeddings_dir / self.language / self.encoder.model_name / "dev.parquet"
             )
 
         else:
@@ -165,14 +186,13 @@ class TrainPipelineSklearn(TrainPipeline):
         self,
         language,
         model,
-        data_path,
         data=None,
-        batch_size=128,
         model_hyperparams=None,
         random_seed: int = 42,
+        encoder: Encoder = None,
     ):
         super().__init__(
-            language, model, data_path, data, batch_size, use_class_weights=True, random_seed=random_seed
+            language, model, data, use_class_weights=True, random_seed=random_seed
         )
         if model_hyperparams is None:
             self.hyperparams = {}
@@ -180,6 +200,7 @@ class TrainPipelineSklearn(TrainPipeline):
             self.hyperparams = model_hyperparams
         self.train_scores = []
         self.val_scores = []
+        self.encoder = encoder
 
     def set_random_seeds(self):
         np.random.seed(self.random_seed)
@@ -227,20 +248,19 @@ class TrainPipelineSklearn(TrainPipeline):
     def run(self):
         self.train()
     
-
 class TrainPipelineNN(TrainPipeline):
     def __init__(
         self,
         language,
         model,
-        data_path,
         data=None,
         batch_size=128,
         model_hyperparams=None,
         random_seed: int = 42,
+        encoder: Encoder = None,
     ):
         super().__init__(
-            language, model, data_path, data, batch_size, random_seed=random_seed
+            language, model, data, batch_size, random_seed=random_seed
         )
         if model_hyperparams is None:
             self.hyperparams = {}
@@ -249,6 +269,7 @@ class TrainPipelineNN(TrainPipeline):
         self.train_losses = []
         self.val_losses = []
         self.class_weights = None
+        self.encoder = encoder
 
     def set_random_seeds(self):
         """Set random seeds for all relevant libraries."""
@@ -398,33 +419,27 @@ class TrainPipelineNN(TrainPipeline):
 class MasterPipeline:
     def __init__(
         self,
-        paths: ProjectPaths,
-        data_path: Path,
-        embedding_model: SentenceTransformer,
+        encoder: Encoder,
         classifier: Any,
         language: str,
     ):
-        self.paths = paths
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.ingestion_pipeline = IngestionPipeline(
-            data_path=data_path, language=language, embedding_model=embedding_model
-        )
-        self.data_path = data_path
+        self.ingestion_pipeline = IngestionPipeline(language=language, encoder=encoder)
         self.language = language
         self.classifier = classifier
+        self.encoder = encoder
 
     def run(self, save_run_info: bool = True):
         self.ingestion_pipeline.run()
         self.training_pipeline = TrainPipelineNN(
+            encoder=self.encoder,
             language=self.language,
             model=self.classifier,
-            data_path=self.data_path,
             data=(self.ingestion_pipeline.train_data, self.ingestion_pipeline.val_data),
         )
         self.training_pipeline.run()
         self.evaluation_pipeline = EvaluationPipelineNN(
             model=self.training_pipeline.model,
-            data_path=self.data_path,
             data=self.ingestion_pipeline.test_data,
         )
         self.evaluation_pipeline.run()
@@ -433,7 +448,8 @@ class MasterPipeline:
     def log_run(self, save_run_info: bool = True):
         run_info = {
             "language": self.language,
-            "model_arch": self.training_pipeline.model.get_architecture(),
+            "encoder": self.encoder.get_params(),
+            "classifier": self.training_pipeline.model.get_architecture(),
             "random_seed": self.training_pipeline.random_seed,
             "hyperparams": self.training_pipeline.hyperparams,
             "stats": self.evaluation_pipeline.get_stats(),
@@ -441,18 +457,18 @@ class MasterPipeline:
 
         if save_run_info:
             # Save metadata
-            with open(self.paths.run_info_dir / f"run_{self.timestamp}.json", "w") as f:
+            with open(paths.run_info_dir / f"run_{self.timestamp}.json", "w") as f:
                 json.dump(run_info, f)
 
             # Save model weights
             torch.save(
                 self.training_pipeline.model.state_dict(),
-                self.paths.weights_dir / f"run_{self.timestamp}_weights.pth",
+                paths.weights_dir / f"run_{self.timestamp}_weights.pth",
             )
 
             # Save plots
             self.training_pipeline.loss_figure.savefig(
-                self.paths.plots_dir / f"run_{self.timestamp}_train_val_loss.png",
+                paths.plots_dir / f"run_{self.timestamp}_train_val_loss.png",
                 dpi=300,
             )
 
@@ -461,23 +477,23 @@ class EvaluationPipeline(ABC):
     def __init__(
         self,
         model,
-        paths: Path,
         test_data=None,
         language: str = "en",
         batch_size: int = 128,
+        encoder: Encoder = None,
     ):
         self.model = model
-        self.data_path = paths
         self.test_data = test_data
         self.language = language
         self.batch_size = batch_size
         self.test_loader = None
+        self.encoder = encoder
 
     def unpack_data(self):
         if self.test_data is None:
             # Unpack data from parquet files
             self.test_data = pd.read_parquet(
-                self.data_path / f"dev_test_{self.language}_embeddings.parquet"
+                paths.embeddings_dir / self.language / self.encoder.model_name / "test.parquet"
             )
 
     def split_data(self):
@@ -491,8 +507,8 @@ class EvaluationPipeline(ABC):
         pass
 
 class EvaluationPipelineSklearn(EvaluationPipeline):
-    def __init__(self, model, data_path, data):
-        super().__init__(model, data_path, data)
+    def __init__(self, model, data):
+        super().__init__(model, data)
 
     def compute_metrics(self, y_pred):
         self.accuracy = accuracy_score(self.y_test, y_pred)
@@ -526,8 +542,8 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
 
 
 class EvaluationPipelineNN(EvaluationPipeline):
-    def __init__(self, model, data_path, data, random_seed: int = 42):
-        super().__init__(model, data_path, data)
+    def __init__(self, model, data, random_seed: int = 42):
+        super().__init__(model, data)
         if torch.backends.mps.is_available():
             self.device = torch.device("mps")
         else:
@@ -597,18 +613,14 @@ class EvaluationPipelineNN(EvaluationPipeline):
 class MasterPipelineSklearn:
     def __init__(
         self,
-        paths: ProjectPaths,
-        data_path: Path,
-        embedding_model: SentenceTransformer,
+        encoder: Encoder,
         classifier: Any,
         language: str,
     ):
-        self.paths = paths
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.ingestion_pipeline = IngestionPipeline(
-            data_path=data_path, language=language, embedding_model=embedding_model
+            language=language, encoder=encoder
         )
-        self.data_path = data_path
         self.language = language
         self.classifier = classifier
 
@@ -617,13 +629,11 @@ class MasterPipelineSklearn:
         self.training_pipeline = TrainPipelineSklearn(
             language=self.language,
             model=self.classifier,
-            data_path=self.data_path,
             data=(self.ingestion_pipeline.train_data, self.ingestion_pipeline.val_data),
         )
         self.training_pipeline.run()
         self.evaluation_pipeline = EvaluationPipelineSklearn(
             model=self.training_pipeline.model,
-            data_path=self.data_path,
             data=self.ingestion_pipeline.test_data,
         )
         self.evaluation_pipeline.run()
@@ -632,6 +642,7 @@ class MasterPipelineSklearn:
     def log_run(self, save_run_info: bool = True):
         run_info = {
             "language": self.language,
+            "encoder": self.encoder.get_params(),
             "model_type": self.training_pipeline.model.__class__.__name__,
             "random_seed": self.training_pipeline.random_seed,
             "hyperparams": self.training_pipeline.model.get_params(),

@@ -51,5 +51,9 @@ class ProjectPaths(BaseModel):
         / "model_checkpoints"
         / "plots"
     )
+    embeddings_dir: Path = Field(
+        default_factory=lambda: Path(__file__).resolve().parents[1] / "embeddings"
+    )
 
     model_config = ConfigDict(frozen=True)
+
