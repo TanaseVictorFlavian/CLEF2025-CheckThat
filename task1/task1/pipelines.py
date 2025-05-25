@@ -39,15 +39,8 @@ class IngestionPipeline:
     def run(self, save_embeddings: bool = True):
         print("Running embedding model ...")
         self.train_data = self.encode_data(self.train_data)
-
-        if self.encoder.model_name == "tfidf":
-            vectorizer = self.encoder.model
-            self.val_data = vectorizer.transform(self.val_data).toarray()
-            self.test_data = vectorizer.transform(self.test_data).toarray()
-       
-        else:
-            self.val_data = self.encode_data(self.val_data)
-            self.test_data = self.encode_data(self.test_data)
+        self.val_data = self.encode_data(self.val_data)
+        self.test_data = self.encode_data(self.test_data)
 
         # Save train data
         if not save_embeddings:
