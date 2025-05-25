@@ -54,3 +54,9 @@ task1/model_checkpoints/runs/*
 
 *.ipynb
 task1/pretrained_model_weights/
+!task1/embeddings/english/.gitkeep
+!task1/embeddings/german/.gitkeep
+!task1/embeddings/italian/.gitkeep
+!task1/embeddings/bulgarian/.gitkeep
+!task1/embeddings/arabic/.gitkeep
+
