@@ -51,3 +51,5 @@ task1/model_checkpoints/runs/*
 !task1/model_checkpoints/plots/.gitkeep
 !task1/model_checkpoints/weights/.gitkeep
 !task1/model_checkpoints/runs/.gitkeep
+
+task1/pretrained_model_weights/
