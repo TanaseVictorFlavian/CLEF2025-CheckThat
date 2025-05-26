@@ -251,9 +251,10 @@ class TrainPipelineNN(TrainPipeline):
         model_hyperparams=None,
         random_seed: int = 42,
         encoder: Encoder = None,
+        use_class_weights: bool = True,
     ):
         super().__init__(
-            language, model, data, batch_size, random_seed=random_seed
+            language, model, data, batch_size, random_seed=random_seed, use_class_weights=use_class_weights, encoder=encoder
         )
         if model_hyperparams is None:
             self.hyperparams = {}
@@ -261,7 +262,10 @@ class TrainPipelineNN(TrainPipeline):
             self.hyperparams = model_hyperparams
         self.train_losses = []
         self.val_losses = []
-        self.class_weights = None
+        if use_class_weights:
+            self.set_class_weights()
+        else:
+            self.class_weights = None
         self.encoder = encoder
 
     def set_random_seeds(self):
@@ -344,28 +348,19 @@ class TrainPipelineNN(TrainPipeline):
 
         self.model.to(self.device)
 
-        if self.hyperparams:
-            epochs = self.hyperparams["epochs"]
-            lr = self.hyperparams["lr"]
-            weight_decay = self.hyperparams["weight_decay"]
-            loss_fn = torch.nn.BCEWithLogitsLoss(weight=self.class_weights)
-            optimizer = torch.optim.AdamW(
-                self.model.parameters(), lr=lr, weight_decay=weight_decay
-            )
+        # Model hyperparams
+        epochs        = self.hyperparams.get("epochs",       10)
+        lr            = self.hyperparams.get("lr",       3e-4)
+        weight_decay  = self.hyperparams.get("weight_decay", 0.0)
 
-        else:
-            epochs = 10
-            lr = 3e-4
-            loss_fn = torch.nn.BCEWithLogitsLoss(weight=self.class_weights)
-            weight_decay = 0
-            optimizer = torch.optim.Adam(
-                self.model.parameters(), lr=lr, weight_decay=weight_decay
-            )
-
-            self.hyperparams["epochs"] = epochs
-            self.hyperparams["lr"] = lr
-            self.hyperparams["weight_decay"] = weight_decay
-            self.hyperparams["optimizer"] = "Adam"
+        # pos_weight for BCE
+        if self.class_weights is None:
+            self.set_class_weights()
+        pos_weight = torch.tensor(
+            self.class_weights[1], dtype=torch.float32, device=self.device
+        )
+        loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
 
         print(f"Training running on: {self.device}")
 
