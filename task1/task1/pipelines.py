@@ -434,6 +434,8 @@ class MasterPipeline:
         self.evaluation_pipeline = EvaluationPipelineNN(
             model=self.training_pipeline.model,
             data=self.ingestion_pipeline.test_data,
+            encoder =self.encoder,
+            language=self.language,
         )
         self.evaluation_pipeline.run()
         self.log_run()
@@ -471,7 +473,7 @@ class EvaluationPipeline(ABC):
         self,
         model,
         test_data=None,
-        language: str = "en",
+        language: str = "english",
         batch_size: int = 128,
         encoder: Encoder = None,
     ):
@@ -541,6 +543,7 @@ class EvaluationPipelineNN(EvaluationPipeline):
             self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
+        self.model.to(self.device)
         self.random_seed = random_seed
 
     def create_data_loaders(self):
@@ -563,9 +566,9 @@ class EvaluationPipelineNN(EvaluationPipeline):
 
     def compute_metrics(self, y_pred):
         self.accuracy = accuracy_score(self.y_test, y_pred)
-        self.precision = precision_score(self.y_test, y_pred)
-        self.recall = recall_score(self.y_test, y_pred)
-        self.f1 = f1_score(self.y_test, y_pred)
+        self.precision = precision_score(self.y_test, y_pred, zero_division=0)
+        self.recall = recall_score(self.y_test, y_pred, zero_division=0)
+        self.f1 = f1_score(self.y_test, y_pred, zero_division=0)
 
         print(f"Accuracy: {self.accuracy}")
         print(f"Precision: {self.precision}")

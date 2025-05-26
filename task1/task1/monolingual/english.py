@@ -1,6 +1,5 @@
 from task1 import pipelines as ppl
 from task1.config import ProjectPaths
-from sentence_transformers import SentenceTransformer
 from sklearn.ensemble import RandomForestClassifier 
 import torch
 from task1.models.MLP import MLP
