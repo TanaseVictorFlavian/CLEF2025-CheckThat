@@ -354,7 +354,7 @@ class TrainPipelineNN(TrainPipeline):
             )
 
         else:
-            epochs = 5
+            epochs = 10
             lr = 3e-4
             loss_fn = torch.nn.BCEWithLogitsLoss(weight=self.class_weights)
             weight_decay = 0
@@ -537,8 +537,8 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
 
 
 class EvaluationPipelineNN(EvaluationPipeline):
-    def __init__(self, model, data, random_seed: int = 42):
-        super().__init__(model, data)
+    def __init__(self, model, data, language, encoder, random_seed: int = 42):
+        super().__init__(model, data, language, encoder=encoder)
         if torch.backends.mps.is_available():
             self.device = torch.device("mps")
         else:
@@ -559,7 +559,7 @@ class EvaluationPipelineNN(EvaluationPipeline):
         self.test_loader = DataLoader(
             test_dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=False,
             pin_memory=True,
             generator=g,
         )
