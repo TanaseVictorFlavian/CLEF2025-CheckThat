@@ -73,3 +73,41 @@ class Word2VecEncoder(Encoder):
             "model_name": self.model_name,
             "embedding_dim": self.emb_dim,
         }
+
+class TfidfEncoder(Encoder):
+    def __init__(
+        self,
+        max_features: int | None = None,
+        ngram_range: tuple[int, int] = (1, 1),
+        **tfidf_kwargs
+    ):
+        super().__init__()
+        self.model_name = "TFIDF encoder"
+        self.vectorizer = TfidfVectorizer(
+            max_features=max_features,
+            ngram_range=ngram_range,
+            **tfidf_kwargs
+        )
+        self._fitted = False
+        self.emb_dim: int | None = None
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        # On first call, fit the vectorizer; afterwards just transform
+        if not self._fitted:
+            X = self.vectorizer.fit_transform(texts)
+            self.emb_dim = X.shape[1]
+            self._fitted = True
+        else:
+            X = self.vectorizer.transform(texts)
+        return X.toarray()
+
+    def get_emb_dim(self) -> int:
+        return self.emb_dim
+
+    def get_params(self) -> dict:
+        return {
+            "model_name":    self.model_name,
+            "max_features":  self.vectorizer.max_features,
+            "ngram_range":   self.vectorizer.ngram_range,
+            "embedding_dim": self.get_emb_dim(),
+        }
