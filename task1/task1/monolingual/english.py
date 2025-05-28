@@ -15,8 +15,9 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    encoder = SentenceTransformerEncoder(model_name="all-MiniLM-L6-v2")
-
+    #encoder = SentenceTransformerEncoder(model_name="all-MiniLM-L6-v2")
+    encoder = Word2VecEncoder()
+    """	
     classifier = MLP(
         in_features=encoder.get_emb_dim(),
         out_features=1
@@ -27,19 +28,17 @@ if __name__ == "__main__":
         classifier=classifier,
         language="english",
     )
+    """
 
-
-    # classifier = RandomForestClassifier(
-    #     n_estimators=100,
-    #     max_depth=10,
-    #     random_state=42,
-    # )
-    # master_pipeline = ppl.MasterPipelineSklearn(
-    #     paths=paths,
-    #     data_path=paths.english_data_dir,
-    #     embedding_model=embedding_model,
-    #     classifier=classifier,
-    #     language="en",
-    # )
+    classifier = RandomForestClassifier(
+         n_estimators=100, 
+         max_depth=10, 
+         random_state=42,  
+    ) 
+    master_pipeline = ppl.MasterPipelineSklearn(
+        encoder=encoder,
+        classifier=classifier,
+        language="english",
+    )
 
     master_pipeline.run()
