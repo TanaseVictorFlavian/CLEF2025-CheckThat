@@ -60,3 +60,4 @@ task1/pretrained_model_weights/
 !task1/embeddings/bulgarian/.gitkeep
 !task1/embeddings/arabic/.gitkeep
 
+results/
