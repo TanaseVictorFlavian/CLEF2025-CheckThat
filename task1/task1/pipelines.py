@@ -9,12 +9,15 @@ import os
 from sklearn.utils import compute_class_weight
 from torch.utils.data import TensorDataset
 from torch.utils.data import DataLoader
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.model_selection import RandomizedSearchCV
 import torch.nn.functional as F
 import json
+import joblib
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from datetime import datetime
+import itertools
 
 from sentence_transformers import SentenceTransformer
 from task1.config import ProjectPaths
@@ -180,20 +183,25 @@ class TrainPipelineSklearn(TrainPipeline):
         language,
         model,
         data=None,
-        model_hyperparams=None,
+        model_hyperparams: dict | None = None,
+        n_iter: int = 20,
+        cv: int = 5,
         random_seed: int = 42,
         encoder: Encoder = None,
     ):
         super().__init__(
             language, model, data, use_class_weights=True, random_seed=random_seed
         )
-        if model_hyperparams is None:
-            self.hyperparams = {}
-        else:
-            self.hyperparams = model_hyperparams
+                    
         self.train_scores = []
         self.val_scores = []
+        self.param_distributions = model_hyperparams or {}
+        self.n_iter = n_iter
+        self.cv = cv
         self.encoder = encoder
+        # to record CV best params & scores
+        self.best_params_ = {}
+        self.best_score_ = None
 
     def set_random_seeds(self):
         np.random.seed(self.random_seed)
@@ -210,18 +218,30 @@ class TrainPipelineSklearn(TrainPipeline):
         if hasattr(self.model, "class_weight"):
             self.model.set_params(class_weight=self.class_weight_dict)
     
-    def plot_scores(self):
-        self.loss_figure = plt.figure(figsize=(10, 6))
-        plt.plot(self.train_scores, label="Training Accuracy")
-        plt.plot(self.val_scores, label="Validation Accuracy")
-        plt.xlabel("Step")
-        plt.ylabel("Accuracy")
-        plt.title("Training and Validation Accuracy")
-        plt.legend()
-        plt.close()
-
     def train(self):
-        self.model.fit(self.X_train, self.y_train)
+        if self.param_distributions:
+            # wrap in RandomizedSearchCV
+            rnd = RandomizedSearchCV(
+                estimator=self.model,
+                param_distributions=self.param_distributions,
+                n_iter=self.n_iter,
+                cv=self.cv,
+                scoring="f1_macro",
+                random_state=self.random_seed,
+                n_jobs=-1,
+                verbose=1,
+            )
+            rnd.fit(self.X_train, self.y_train)
+            # Record best model
+            self.best_params_ = rnd.best_params_
+            self.best_score_  = rnd.best_score_
+            print("Best CV f1 =", f"{self.best_score_:.4f}")
+            print("Best params:", self.best_params_)
+
+            # replace model with the best estimator
+            self.model = rnd.best_estimator_
+        else:
+            self.model.fit(self.X_train, self.y_train)
 
         y_train_pred = self.model.predict(self.X_train)
         y_val_pred = self.model.predict(self.X_val)
@@ -234,8 +254,6 @@ class TrainPipelineSklearn(TrainPipeline):
 
         print(f"Training Accuracy: {train_acc:.4f}")
         print(f"Validation Accuracy: {val_acc:.4f}")
-
-        self.plot_scores()
         print("Training completed!")
 
     def run(self):
@@ -251,9 +269,10 @@ class TrainPipelineNN(TrainPipeline):
         model_hyperparams=None,
         random_seed: int = 42,
         encoder: Encoder = None,
+        use_class_weights: bool = True,
     ):
         super().__init__(
-            language, model, data, batch_size, random_seed=random_seed
+            language, model, data, batch_size, random_seed=random_seed, use_class_weights=use_class_weights, encoder=encoder
         )
         if model_hyperparams is None:
             self.hyperparams = {}
@@ -261,7 +280,10 @@ class TrainPipelineNN(TrainPipeline):
             self.hyperparams = model_hyperparams
         self.train_losses = []
         self.val_losses = []
-        self.class_weights = None
+        if use_class_weights:
+            self.set_class_weights()
+        else:
+            self.class_weights = None
         self.encoder = encoder
 
     def set_random_seeds(self):
@@ -344,28 +366,18 @@ class TrainPipelineNN(TrainPipeline):
 
         self.model.to(self.device)
 
-        if self.hyperparams:
-            epochs = self.hyperparams["epochs"]
-            lr = self.hyperparams["lr"]
-            weight_decay = self.hyperparams["weight_decay"]
-            loss_fn = torch.nn.BCEWithLogitsLoss(weight=self.class_weights)
-            optimizer = torch.optim.AdamW(
-                self.model.parameters(), lr=lr, weight_decay=weight_decay
-            )
+        # Model hyperparams
+        epochs        = self.hyperparams.get("epochs",       10)
+        lr            = self.hyperparams.get("lr",       3e-4)
+        weight_decay  = self.hyperparams.get("weight_decay", 0.0)
 
-        else:
-            epochs = 5
-            lr = 3e-4
-            loss_fn = torch.nn.BCEWithLogitsLoss(weight=self.class_weights)
-            weight_decay = 0
-            optimizer = torch.optim.Adam(
-                self.model.parameters(), lr=lr, weight_decay=weight_decay
-            )
-
-            self.hyperparams["epochs"] = epochs
-            self.hyperparams["lr"] = lr
-            self.hyperparams["weight_decay"] = weight_decay
-            self.hyperparams["optimizer"] = "Adam"
+        if self.class_weights is None:
+            self.set_class_weights()
+        pos_weight = torch.tensor(
+            self.class_weights[1], dtype=torch.float32, device=self.device
+        )
+        loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
 
         print(f"Training running on: {self.device}")
 
@@ -434,6 +446,8 @@ class MasterPipeline:
         self.evaluation_pipeline = EvaluationPipelineNN(
             model=self.training_pipeline.model,
             data=self.ingestion_pipeline.test_data,
+            encoder =self.encoder,
+            language=self.language,
         )
         self.evaluation_pipeline.run()
         self.log_run()
@@ -471,7 +485,7 @@ class EvaluationPipeline(ABC):
         self,
         model,
         test_data=None,
-        language: str = "en",
+        language: str = "english",
         batch_size: int = 128,
         encoder: Encoder = None,
     ):
@@ -505,14 +519,14 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
 
     def compute_metrics(self, y_pred):
         self.accuracy = accuracy_score(self.y_test, y_pred)
-        self.precision = precision_score(self.y_test, y_pred)
-        self.recall = recall_score(self.y_test, y_pred)
-        self.f1 = f1_score(self.y_test, y_pred)
+        self.precision = precision_score(self.y_test, y_pred, average='macro', zero_division=0)
+        self.recall = recall_score(self.y_test, y_pred, average='macro', zero_division=0)
+        self.f1 = f1_score(self.y_test, y_pred, average='macro', zero_division=0)
 
-        print(f"Accuracy: {self.accuracy:.4f}")
-        print(f"Precision: {self.precision:.4f}")
-        print(f"Recall: {self.recall:.4f}")
-        print(f"F1 Score: {self.f1:.4f}")
+        print(f"Accuracy: {self.accuracy}")
+        print(f"Precision (macro): {self.precision}")
+        print(f"Recall (macro): {self.recall}")
+        print(f"F1 (macro): {self.f1}")
 
     def evaluate_model(self):
         self.split_data()
@@ -521,6 +535,7 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
         y_pred = self.model.predict(self.X_test)
 
         self.compute_metrics(y_pred)
+        self.plot_confusion_matrix(y_pred)
 
     def get_stats(self):
         return {
@@ -529,18 +544,53 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
             "recall": self.recall,
             "f1": self.f1,
         }
+    
+    def plot_confusion_matrix(self, y_pred):
+        # 1) compute raw counts
+        self.cm = confusion_matrix(self.y_test, y_pred)
+
+        # 2) create exactly one figure and keep a handle to it
+        self.cm_figure = plt.figure(figsize=(6, 6))
+        ax = self.cm_figure.add_subplot(1, 1, 1)
+
+        # 3) plot the matrix array, NOT the figure itself!
+        im = ax.imshow(self.cm, interpolation='nearest', cmap=plt.cm.Blues)
+        ax.set_title('Confusion Matrix')
+        plt.colorbar(im, ax=ax)
+
+        # 4) label ticks
+        labels = ['OBJ', 'SUBJ']
+        tick_marks = np.arange(len(labels))
+        ax.set_xticks(tick_marks)
+        ax.set_xticklabels(labels, rotation=45)
+        ax.set_yticks(tick_marks)
+        ax.set_yticklabels(labels)
+
+        ax.set_ylabel('True label')
+        ax.set_xlabel('Predicted label')
+
+        # 5) annotate each cell with the count
+        thresh = self.cm.max() / 2.0
+        for i, j in itertools.product(range(self.cm.shape[0]), range(self.cm.shape[1])):
+            color = "white" if self.cm[i, j] > thresh else "black"
+            ax.text(j, i, format(self.cm[i, j], 'd'),
+                    ha="center", va="center", color=color)
+
+        plt.tight_layout()
+        plt.close(self.cm_figure)
 
     def run(self):
         self.evaluate_model()
 
 
 class EvaluationPipelineNN(EvaluationPipeline):
-    def __init__(self, model, data, random_seed: int = 42):
-        super().__init__(model, data)
+    def __init__(self, model, data, language, encoder, random_seed: int = 42):
+        super().__init__(model, data, language, encoder=encoder)
         if torch.backends.mps.is_available():
             self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
+        self.model.to(self.device)
         self.random_seed = random_seed
 
     def create_data_loaders(self):
@@ -556,21 +606,21 @@ class EvaluationPipelineNN(EvaluationPipeline):
         self.test_loader = DataLoader(
             test_dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=False,
             pin_memory=True,
             generator=g,
         )
 
     def compute_metrics(self, y_pred):
         self.accuracy = accuracy_score(self.y_test, y_pred)
-        self.precision = precision_score(self.y_test, y_pred)
-        self.recall = recall_score(self.y_test, y_pred)
-        self.f1 = f1_score(self.y_test, y_pred)
+        self.precision = precision_score(self.y_test, y_pred, average='macro', zero_division=0)
+        self.recall = recall_score(self.y_test, y_pred, average='macro', zero_division=0)
+        self.f1 = f1_score(self.y_test, y_pred, average='macro', zero_division=0)
 
         print(f"Accuracy: {self.accuracy}")
-        print(f"Precision: {self.precision}")
-        print(f"Recall: {self.recall}")
-        print(f"F1: {self.f1}")
+        print(f"Precision (macro): {self.precision}")
+        print(f"Recall (macro): {self.recall}")
+        print(f"F1 (macro): {self.f1}")
 
     def get_predictions(self, logits):
         return [1 if logit > 0.5 else 0 for logit in F.sigmoid(logits)]
@@ -609,13 +659,16 @@ class MasterPipelineSklearn:
         encoder: Encoder,
         classifier: Any,
         language: str,
+        model_hyperparams: dict | None = None,
     ):
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.encoder = encoder
         self.ingestion_pipeline = IngestionPipeline(
             language=language, encoder=encoder
         )
         self.language = language
         self.classifier = classifier
+        self.model_hyperparams = model_hyperparams
 
     def run(self, save_run_info: bool = True):
         self.ingestion_pipeline.run()
@@ -623,6 +676,7 @@ class MasterPipelineSklearn:
             language=self.language,
             model=self.classifier,
             data=(self.ingestion_pipeline.train_data, self.ingestion_pipeline.val_data),
+            model_hyperparams=self.model_hyperparams,
         )
         self.training_pipeline.run()
         self.evaluation_pipeline = EvaluationPipelineSklearn(
@@ -633,13 +687,34 @@ class MasterPipelineSklearn:
         self.log_run()
 
     def log_run(self, save_run_info: bool = True):
+        chosen_hparams = (
+            self.training_pipeline.best_params_
+            if getattr(self.training_pipeline, "best_params_", None)
+            else self.training_pipeline.model.get_params()
+        )
+
         run_info = {
             "language": self.language,
             "encoder": self.encoder.get_params(),
             "model_type": self.training_pipeline.model.__class__.__name__,
             "random_seed": self.training_pipeline.random_seed,
-            "hyperparams": self.training_pipeline.model.get_params(),
+            "hyperparams": chosen_hparams,
             "stats": self.evaluation_pipeline.get_stats(),
         }
-        print(run_info)
+        
+        if save_run_info:
+            # Save metadata
+            run_info_path = paths.run_info_dir / f"run_{self.timestamp}.json"
+            with open(run_info_path, "w") as f:
+                json.dump(run_info, f, indent=2)
+
+            # Save trained sklearn model
+            model_path = paths.weights_dir / f"run_{self.timestamp}_model.pkl"
+            joblib.dump(self.training_pipeline.model, model_path)
+            
+            # Save plots
+            self.evaluation_pipeline.cm_figure.savefig(
+                paths.plots_dir / f"run_{self.timestamp}_confusion_matrix.png",
+                dpi=300,
+            )
     

@@ -6,12 +6,15 @@ readme = "README.md"
 requires-python = ">=3.11.9"
 dependencies = [
     "accelerate>=1.6.0",
+    "datasets>=3.6.0",
+    "evaluate>=0.4.3",
     "fastparquet>=2024.11.0",
     "gensim>=4.3.3",
     "ipykernel>=6.29.5",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.1",
     "pandas>=2.2.3",
+    "peft>=0.15.2",
     "pyarrow>=19.0.1",
     "pydantic>=2.11.2",
     "seaborn>=0.13.2",
