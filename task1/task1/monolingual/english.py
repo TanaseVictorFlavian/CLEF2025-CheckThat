@@ -52,7 +52,7 @@ if __name__ == "__main__":
         encoder=encoder,
         classifier=classifier,
         language="english",
-        model_hyperparams=lr_space,
+        param_distributions=lr_space,
     )
     
     """ Random Forest Classifier Hyperparameters """	
@@ -69,7 +69,7 @@ if __name__ == "__main__":
         encoder=encoder,
         classifier=classifier,
         language="english",
-        model_hyperparams=rf_space,
+        param_distributions=rf_space,
     )
     """
 
@@ -90,7 +90,7 @@ if __name__ == "__main__":
         encoder=encoder,
         classifier=classifier,
         language="english",
-        model_hyperparams=svm_space,
+        param_distributions=svm_space,
     )
     """
 

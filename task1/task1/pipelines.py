@@ -184,6 +184,7 @@ class TrainPipelineSklearn(TrainPipeline):
         model,
         data=None,
         model_hyperparams: dict | None = None,
+        param_distributions: dict | None = None,
         n_iter: int = 20,
         cv: int = 5,
         random_seed: int = 42,
@@ -195,7 +196,8 @@ class TrainPipelineSklearn(TrainPipeline):
                     
         self.train_scores = []
         self.val_scores = []
-        self.param_distributions = model_hyperparams or {}
+        self.model_hyperparams = model_hyperparams or {}
+        self.param_distributions = param_distributions or {}
         self.n_iter = n_iter
         self.cv = cv
         self.encoder = encoder
@@ -546,19 +548,15 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
         }
     
     def plot_confusion_matrix(self, y_pred):
-        # 1) compute raw counts
         self.cm = confusion_matrix(self.y_test, y_pred)
 
-        # 2) create exactly one figure and keep a handle to it
         self.cm_figure = plt.figure(figsize=(6, 6))
         ax = self.cm_figure.add_subplot(1, 1, 1)
 
-        # 3) plot the matrix array, NOT the figure itself!
         im = ax.imshow(self.cm, interpolation='nearest', cmap=plt.cm.Blues)
         ax.set_title('Confusion Matrix')
         plt.colorbar(im, ax=ax)
 
-        # 4) label ticks
         labels = ['OBJ', 'SUBJ']
         tick_marks = np.arange(len(labels))
         ax.set_xticks(tick_marks)
@@ -569,7 +567,6 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
         ax.set_ylabel('True label')
         ax.set_xlabel('Predicted label')
 
-        # 5) annotate each cell with the count
         thresh = self.cm.max() / 2.0
         for i, j in itertools.product(range(self.cm.shape[0]), range(self.cm.shape[1])):
             color = "white" if self.cm[i, j] > thresh else "black"
@@ -660,6 +657,7 @@ class MasterPipelineSklearn:
         classifier: Any,
         language: str,
         model_hyperparams: dict | None = None,
+        param_distributions: dict | None = None,
     ):
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.encoder = encoder
@@ -669,6 +667,7 @@ class MasterPipelineSklearn:
         self.language = language
         self.classifier = classifier
         self.model_hyperparams = model_hyperparams
+        self.param_distributions = param_distributions 
 
     def run(self, save_run_info: bool = True):
         self.ingestion_pipeline.run()
@@ -677,6 +676,7 @@ class MasterPipelineSklearn:
             model=self.classifier,
             data=(self.ingestion_pipeline.train_data, self.ingestion_pipeline.val_data),
             model_hyperparams=self.model_hyperparams,
+            param_distributions=self.param_distributions,
         )
         self.training_pipeline.run()
         self.evaluation_pipeline = EvaluationPipelineSklearn(
@@ -687,11 +687,11 @@ class MasterPipelineSklearn:
         self.log_run()
 
     def log_run(self, save_run_info: bool = True):
-        chosen_hparams = (
-            self.training_pipeline.best_params_
-            if getattr(self.training_pipeline, "best_params_", None)
-            else self.training_pipeline.model.get_params()
-        )
+        chosen_hparams = {}
+        if self.training_pipeline.best_params_:
+            chosen_hparams = self.training_pipeline.best_params_
+        else:
+            chosen_hparams = self.training_pipeline.model_hyperparams
 
         run_info = {
             "language": self.language,
