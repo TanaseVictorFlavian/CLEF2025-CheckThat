@@ -31,8 +31,9 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 paths = ProjectPaths()
 
 class IngestionPipeline:
-    def __init__(self, language: list[str], encoder: Encoder):
+    def __init__(self, language: list[str], encoder: Encoder, test_language: str):
         self.language = language
+        self.test_language = test_language
         self.train_data = None
         self.val_data = None
         self.test_data = None
@@ -44,13 +45,16 @@ class IngestionPipeline:
         self.train_data = self.encode_data(self.train_data)
         self.val_data = self.encode_data(self.val_data)
         self.test_data = self.encode_data(self.test_data)
-
+        
+        if len(self.language) > 1:
+            print("Skipping embedding generation to avoid recomputation.")
+            return
         # Save train data
         if not save_embeddings:
             return
         
         # Create directory if it doesn't exist
-        output_dir = paths.embeddings_dir / self.language / self.encoder.model_name
+        output_dir = paths.embeddings_dir / self.language[0] / self.encoder.model_name
         output_dir.mkdir(parents=True, exist_ok=True)
         
         pd.DataFrame(self.train_data).to_parquet(
@@ -66,23 +70,37 @@ class IngestionPipeline:
         )
 
     def load_data(self):
-        splits = os.listdir(paths.data_dir / self.language)
-        train, val, test = splits[3], splits[0], splits[1]
+        train_dfs, val_dfs = [], []
+        
+        for lang in self.language:
+            lang_path = paths.data_dir / lang
+            splits = os.listdir(lang_path)
+            train, val, test = splits[3], splits[0], splits[1] 
 
-        print(f"Loading training data from : {paths.data_dir / self.language / train}")
-        self.train_data = pd.read_csv(
-            paths.data_dir / self.language / train, sep="\t"
-        )
+            print(f"Loading training data from: {lang_path / train}")
+            train_dfs.append(pd.read_csv(lang_path / train, sep="\t"))
 
-        print(f"Loading validation data from : {paths.data_dir / self.language / val}")
-        self.val_data = pd.read_csv(
-            paths.data_dir / self.language / val, sep="\t"
-        )
+            print(f"Loading validation data from: {lang_path / val}")
+            val_dfs.append(pd.read_csv(lang_path / val, sep="\t"))
 
-        print(f"Loading test data from : {paths.data_dir / self.language / test}")
-        self.test_data = pd.read_csv(
-            paths.data_dir / self.language / test, sep="\t"
-        )
+        self.train_data = pd.concat(train_dfs, ignore_index=True)
+        self.val_data = pd.concat(val_dfs, ignore_index=True)
+        
+        if self.test_language in self.language:
+            if len(self.language) > 1:
+                print(f"Multilingual setup: using test set from language '{self.test_language}' already in training set.")
+            else:
+                print(f"Monolingual setup")
+        else:
+            print(f"Zero-shot setup: using test set from new language '{self.test_language}'.")
+
+        test_path = paths.data_dir / self.test_language
+        splits = os.listdir(test_path)
+        train, val, test = splits[3], splits[0], splits[1] 
+
+        print(f"Loading test data from: {test_path / test}")
+        self.test_data = pd.read_csv(test_path / test, sep="\t")
+
 
     def encode_data(self, data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -106,7 +124,7 @@ class IngestionPipeline:
 class TrainPipeline:
     def __init__(
         self,
-        language: str,
+        language: list[str],
         model: Any,
         data: Any = (None, None),
         batch_size: int = 128,
@@ -428,11 +446,13 @@ class MasterPipeline:
         self,
         encoder: Encoder,
         classifier: Any,
-        language: str,
+        language: list[str],
+        test_language: str,
     ):
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.ingestion_pipeline = IngestionPipeline(language=language, encoder=encoder)
+        self.ingestion_pipeline = IngestionPipeline(language=language, encoder=encoder, test_language=test_language)
         self.language = language
+        self.test_language = test_language
         self.classifier = classifier
         self.encoder = encoder
 
@@ -456,7 +476,8 @@ class MasterPipeline:
 
     def log_run(self, save_run_info: bool = True):
         run_info = {
-            "language": self.language,
+            "training_languages": self.language,
+            "test_language": self.test_language,
             "encoder": self.encoder.get_params(),
             "classifier": self.training_pipeline.model.get_architecture(),
             "random_seed": self.training_pipeline.random_seed,
@@ -655,16 +676,18 @@ class MasterPipelineSklearn:
         self,
         encoder: Encoder,
         classifier: Any,
-        language: str,
+        language: list[str],
+        test_language: str,
         model_hyperparams: dict | None = None,
         param_distributions: dict | None = None,
     ):
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.encoder = encoder
         self.ingestion_pipeline = IngestionPipeline(
-            language=language, encoder=encoder
+            language=language, encoder=encoder , test_language=test_language
         )
         self.language = language
+        self.test_language = test_language
         self.classifier = classifier
         self.model_hyperparams = model_hyperparams
         self.param_distributions = param_distributions 
@@ -694,7 +717,8 @@ class MasterPipelineSklearn:
             chosen_hparams = self.training_pipeline.model_hyperparams
 
         run_info = {
-            "language": self.language,
+            "training_languages": self.language,
+            "test_language": self.test_language,
             "encoder": self.encoder.get_params(),
             "model_type": self.training_pipeline.model.__class__.__name__,
             "random_seed": self.training_pipeline.random_seed,

@@ -20,9 +20,8 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     encoder = SentenceTransformerEncoder(model_name="all-MiniLM-L6-v2")
-    #encoder = Word2VecEncoder()
-    #encoder = TfidfEncoder(max_features=10_000, ngram_range=(1,4))
-    """	
+
+    
     classifier = MLP(
         in_features=encoder.get_emb_dim(),
         out_features=1
@@ -31,18 +30,11 @@ if __name__ == "__main__":
     master_pipeline = ppl.MasterPipeline(
         encoder=encoder,
         classifier=classifier,
-        language="english",
+        language=["english", "arabic", "bulgarian", "german", "italian"],
+        test_language="english",
     )
+    
     """
-    
-    """ Logistic Regression Hyperparameters """
-    lr_space = {
-        "C": loguniform(1e-4, 1e2),
-        "penalty": ["l2"],
-        "solver": ["lbfgs", "saga"],
-        "max_iter": [1000],
-    }
-    
     classifier = LogisticRegression(
         random_state=42,
         n_jobs=-1,
@@ -51,7 +43,7 @@ if __name__ == "__main__":
     master_pipeline = ppl.MasterPipelineSklearn(
         encoder=encoder,
         classifier=classifier,
-        language=["english"],
+        language=["english", "arabic", "bulgarian", "german", "italian"],
         test_language="english",
         model_hyperparams={"C": 0.39079671568228835,
                             "max_iter": 1000,
@@ -59,44 +51,6 @@ if __name__ == "__main__":
                             "solver": "lbfgs"
                         },
     )
+    """
     
-    """ Random Forest Classifier Hyperparameters """	
-    """
-    rf_space = {
-    "n_estimators": randint(50, 300),
-    "max_depth":    randint(5, 50),
-    "min_samples_split": randint(2, 10),
-    }
-    classifier = RandomForestClassifier(
-         random_state=42,  
-    ) 
-    master_pipeline = ppl.MasterPipelineSklearn(
-        encoder=encoder,
-        classifier=classifier,
-        language="english",
-        param_distributions=rf_space,
-    )
-    """
-
-    
-    """ SVM Classifier Hyperparameters """
-    """
-    svm_space = {
-        "C": loguniform(1e-4, 1e2),
-        "kernel": ["linear", "rbf", "poly"],
-        "degree": randint(2, 5),  
-        "gamma": ["scale", "auto"],
-    }
-    classifier = SVC(
-        random_state=42,
-        probability=True,  
-    )
-    master_pipeline = ppl.MasterPipelineSklearn(
-        encoder=encoder,
-        classifier=classifier,
-        language="english",
-        param_distributions=svm_space,
-    )
-    """
-
     master_pipeline.run()
