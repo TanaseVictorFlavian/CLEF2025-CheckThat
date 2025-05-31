@@ -6,7 +6,7 @@ from sklearn.svm import SVC
 import torch
 from task1.models.MLP import MLP
 import os
-from task1.models.encoders import SentenceTransformerEncoder, Word2VecEncoder, TfidfEncoder
+from task1.models.encoders import SentenceTransformerEncoder, Word2VecEncoder, TfidfEncoder, UmbertoEncoder
 from scipy.stats import randint, loguniform
 
 
@@ -19,8 +19,10 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    encoder = SentenceTransformerEncoder(model_name="all-MiniLM-L6-v2")
-    """	
+    #encoder = SentenceTransformerEncoder(model_name="paraphrase-multilingual-MiniLM-L12-v2")
+    encoder = UmbertoEncoder(model_name="Musixmatch/umberto-commoncrawl-cased-v1")
+    
+    """
     classifier = MLP(
         in_features=encoder.get_emb_dim(),
         out_features=1
@@ -29,7 +31,8 @@ if __name__ == "__main__":
     master_pipeline = ppl.MasterPipeline(
         encoder=encoder,
         classifier=classifier,
-        language="english",
+        language=["italian"],
+        test_language="italian",
     )
     """
     
@@ -49,5 +52,6 @@ if __name__ == "__main__":
                             "solver": "lbfgs"
                         },
     )
+    
 
     master_pipeline.run()
