@@ -21,7 +21,7 @@ if __name__ == "__main__":
 
     encoder = SentenceTransformerEncoder(model_name="all-MiniLM-L6-v2")
 
-    """	
+    
     classifier = MLP(
         in_features=encoder.get_emb_dim(),
         out_features=1
@@ -30,10 +30,11 @@ if __name__ == "__main__":
     master_pipeline = ppl.MasterPipeline(
         encoder=encoder,
         classifier=classifier,
-        language="english",
+        language=["english", "arabic", "bulgarian", "german", "italian"],
+        test_language="english",
     )
-    """
     
+    """
     classifier = LogisticRegression(
         random_state=42,
         n_jobs=-1,
@@ -50,5 +51,6 @@ if __name__ == "__main__":
                             "solver": "lbfgs"
                         },
     )
+    """
     
     master_pipeline.run()

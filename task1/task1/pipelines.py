@@ -446,11 +446,13 @@ class MasterPipeline:
         self,
         encoder: Encoder,
         classifier: Any,
-        language: str,
+        language: list[str],
+        test_language: str,
     ):
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.ingestion_pipeline = IngestionPipeline(language=language, encoder=encoder)
+        self.ingestion_pipeline = IngestionPipeline(language=language, encoder=encoder, test_language=test_language)
         self.language = language
+        self.test_language = test_language
         self.classifier = classifier
         self.encoder = encoder
 
@@ -474,7 +476,8 @@ class MasterPipeline:
 
     def log_run(self, save_run_info: bool = True):
         run_info = {
-            "language": self.language,
+            "training_languages": self.language,
+            "test_language": self.test_language,
             "encoder": self.encoder.get_params(),
             "classifier": self.training_pipeline.model.get_architecture(),
             "random_seed": self.training_pipeline.random_seed,
