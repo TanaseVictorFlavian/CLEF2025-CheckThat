@@ -41,7 +41,8 @@ if __name__ == "__main__":
     master_pipeline = ppl.MasterPipelineSklearn(
         encoder=encoder,
         classifier=classifier,
-        language="german",
+        language=["german"],
+        test_language="german",
         model_hyperparams={"C": 0.39079671568228835,
                             "max_iter": 1000,
                             "penalty": "l2",
