@@ -1,1 +1,2 @@
 Lora+distilbert -> 0.71 f1-macro
+GRU -> 0.6787 f1-macro

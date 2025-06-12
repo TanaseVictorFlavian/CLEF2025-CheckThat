@@ -40,7 +40,9 @@ class IngestionPipeline:
         self.load_data()
 
     def run(self, save_embeddings: bool = True):
+        
         print("Running embedding model ...")
+        # Encode data
         self.train_data = self.encode_data(self.train_data)
         self.val_data = self.encode_data(self.val_data)
         self.test_data = self.encode_data(self.test_data)
@@ -270,6 +272,7 @@ class TrainPipelineNN(TrainPipeline):
         random_seed: int = 42,
         encoder: Encoder = None,
         use_class_weights: bool = True,
+        device: torch.device = None,
     ):
         super().__init__(
             language, model, data, batch_size, random_seed=random_seed, use_class_weights=use_class_weights, encoder=encoder
@@ -285,6 +288,7 @@ class TrainPipelineNN(TrainPipeline):
         else:
             self.class_weights = None
         self.encoder = encoder
+        self.device = device
 
     def set_random_seeds(self):
         """Set random seeds for all relevant libraries."""
@@ -359,17 +363,16 @@ class TrainPipelineNN(TrainPipeline):
         return total_loss / len(self.val_loader)
 
     def train(self):
-        if torch.backends.mps.is_available():
-            self.device = torch.device("mps")
-        else:
-            self.device = torch.device("cpu")
-
         self.model.to(self.device)
 
         # Model hyperparams
-        epochs        = self.hyperparams.get("epochs",       10)
-        lr            = self.hyperparams.get("lr",       3e-4)
-        weight_decay  = self.hyperparams.get("weight_decay", 0.0)
+        epochs        = self.hyperparams.get("epochs",       100)
+        lr            = self.hyperparams.get("lr",       1e-3)
+        weight_decay  = self.hyperparams.get("weight_decay", 1e-4)
+        patience = self.hyperparams.get("patience", 15)
+        scheduler_patience = self.hyperparams.get("scheduler_patience", 5)
+        scheduler_factor = self.hyperparams.get("scheduler_factor", 0.5)
+        min_lr = self.hyperparams.get("min_lr", 1e-6)
 
         if self.class_weights is None:
             self.set_class_weights()
@@ -378,8 +381,21 @@ class TrainPipelineNN(TrainPipeline):
         )
         loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        
+        # Add learning rate scheduler
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=scheduler_factor,
+            patience=scheduler_patience,
+            min_lr=min_lr,
+            verbose=True
+        )
 
         print(f"Training running on: {self.device}")
+
+        best_val_loss = float('inf')
+        epochs_no_improve = 0
 
         for epoch in tqdm(range(epochs), desc="Training"):
             # Training phase
@@ -399,6 +415,9 @@ class TrainPipelineNN(TrainPipeline):
 
             # Validation phase
             val_loss = self.validate(loss_fn)
+            
+            # Update learning rate based on validation loss
+            scheduler.step(val_loss)
 
             # Store losses
             self.train_losses.append(train_loss / len(self.train_loader))
@@ -408,13 +427,26 @@ class TrainPipelineNN(TrainPipeline):
             print(f"\nEpoch {epoch+1}/{epochs}")
             print(f"Training Loss: {self.train_losses[-1]:.4f}")
             print(f"Validation Loss: {self.val_losses[-1]:.4f}")
+            print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.2e}")
 
             # Plot losses
             self.plot_losses()
 
+            # Early stopping check
+            if best_val_loss > val_loss:
+                best_val_loss = val_loss
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+
+            if epochs_no_improve >= patience:
+                print(f"\nEarly stopping at epoch {epoch+1}. No improvement in validation loss for {patience} epochs.")
+                break
+
         print("\nTraining completed!")
         print(f"Final Training Loss: {self.train_losses[-1]:.4f}")
         print(f"Final Validation Loss: {self.val_losses[-1]:.4f}")
+        print(f"Final Learning Rate: {optimizer.param_groups[0]['lr']:.2e}")
 
     def run(self):
         self.create_data_loaders()
@@ -427,12 +459,14 @@ class MasterPipeline:
         encoder: Encoder,
         classifier: Any,
         language: str,
+        device: torch.device = None,
     ):
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.ingestion_pipeline = IngestionPipeline(language=language, encoder=encoder)
         self.language = language
         self.classifier = classifier
         self.encoder = encoder
+        self.device = device
 
     def run(self, save_run_info: bool = True):
         self.ingestion_pipeline.run()
@@ -441,6 +475,7 @@ class MasterPipeline:
             language=self.language,
             model=self.classifier,
             data=(self.ingestion_pipeline.train_data, self.ingestion_pipeline.val_data),
+            device=self.device,
         )
         self.training_pipeline.run()
         self.evaluation_pipeline = EvaluationPipelineNN(
@@ -448,6 +483,7 @@ class MasterPipeline:
             data=self.ingestion_pipeline.test_data,
             encoder =self.encoder,
             language=self.language,
+            device=self.device,
         )
         self.evaluation_pipeline.run()
         self.log_run()
@@ -488,6 +524,7 @@ class EvaluationPipeline(ABC):
         language: str = "english",
         batch_size: int = 128,
         encoder: Encoder = None,
+        device: torch.device = None,
     ):
         self.model = model
         self.test_data = test_data
@@ -495,7 +532,6 @@ class EvaluationPipeline(ABC):
         self.batch_size = batch_size
         self.test_loader = None
         self.encoder = encoder
-
     def unpack_data(self):
         if self.test_data is None:
             # Unpack data from parquet files
@@ -584,14 +620,10 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
 
 
 class EvaluationPipelineNN(EvaluationPipeline):
-    def __init__(self, model, data, language, encoder, random_seed: int = 42):
-        super().__init__(model, data, language, encoder=encoder)
-        if torch.backends.mps.is_available():
-            self.device = torch.device("mps")
-        else:
-            self.device = torch.device("cpu")
-        self.model.to(self.device)
+    def __init__(self, model, data, language, encoder, device, random_seed: int = 42):
+        super().__init__(model, data, language, encoder=encoder, device=device)
         self.random_seed = random_seed
+        self.device = device
 
     def create_data_loaders(self):
         self.split_data()
@@ -626,6 +658,7 @@ class EvaluationPipelineNN(EvaluationPipeline):
         return [1 if logit > 0.5 else 0 for logit in F.sigmoid(logits)]
 
     def evaluate_model(self):
+        self.model.to(self.device)
         self.model.eval()
         y_pred = []
 
@@ -660,6 +693,7 @@ class MasterPipelineSklearn:
         classifier: Any,
         language: str,
         model_hyperparams: dict | None = None,
+        device: torch.device = None,
     ):
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.encoder = encoder
@@ -669,7 +703,7 @@ class MasterPipelineSklearn:
         self.language = language
         self.classifier = classifier
         self.model_hyperparams = model_hyperparams
-
+        
     def run(self, save_run_info: bool = True):
         self.ingestion_pipeline.run()
         self.training_pipeline = TrainPipelineSklearn(
