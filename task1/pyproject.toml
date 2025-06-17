@@ -10,6 +10,7 @@ dependencies = [
     "evaluate>=0.4.3",
     "fastparquet>=2024.11.0",
     "gensim>=4.3.3",
+    "hf-xet>=1.1.2",
     "ipykernel>=6.29.5",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.1",

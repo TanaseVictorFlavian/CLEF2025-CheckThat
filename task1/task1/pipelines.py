@@ -31,9 +31,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 paths = ProjectPaths()
 
 class IngestionPipeline:
-    def __init__(self, language: list[str], encoder: Encoder, test_language: str):
+    def __init__(self, language: list[str], encoder: Encoder):
         self.language = language
-        self.test_language = test_language
         self.train_data = None
         self.val_data = None
         self.test_data = None
@@ -41,20 +40,19 @@ class IngestionPipeline:
         self.load_data()
 
     def run(self, save_embeddings: bool = True):
+        
         print("Running embedding model ...")
+        # Encode data
         self.train_data = self.encode_data(self.train_data)
         self.val_data = self.encode_data(self.val_data)
         self.test_data = self.encode_data(self.test_data)
-        
-        if len(self.language) > 1:
-            print("Skipping embedding generation to avoid recomputation.")
-            return
+
         # Save train data
         if not save_embeddings:
             return
         
         # Create directory if it doesn't exist
-        output_dir = paths.embeddings_dir / self.language[0] / self.encoder.model_name
+        output_dir = paths.embeddings_dir / self.language / self.encoder.model_name
         output_dir.mkdir(parents=True, exist_ok=True)
         
         pd.DataFrame(self.train_data).to_parquet(
@@ -70,37 +68,23 @@ class IngestionPipeline:
         )
 
     def load_data(self):
-        train_dfs, val_dfs = [], []
-        
-        for lang in self.language:
-            lang_path = paths.data_dir / lang
-            splits = os.listdir(lang_path)
-            train, val, test = splits[3], splits[0], splits[1] 
+        splits = os.listdir(paths.data_dir / self.language)
+        train, val, test = splits[5], splits[0], splits[3]
 
-            print(f"Loading training data from: {lang_path / train}")
-            train_dfs.append(pd.read_csv(lang_path / train, sep="\t"))
+        print(f"Loading training data from : {paths.data_dir / self.language / train}")
+        self.train_data = pd.read_csv(
+            paths.data_dir / self.language / train, sep="\t"
+        )
 
-            print(f"Loading validation data from: {lang_path / val}")
-            val_dfs.append(pd.read_csv(lang_path / val, sep="\t"))
+        print(f"Loading validation data from : {paths.data_dir / self.language / val}")
+        self.val_data = pd.read_csv(
+            paths.data_dir / self.language / val, sep="\t"
+        )
 
-        self.train_data = pd.concat(train_dfs, ignore_index=True)
-        self.val_data = pd.concat(val_dfs, ignore_index=True)
-        
-        if self.test_language in self.language:
-            if len(self.language) > 1:
-                print(f"Multilingual setup: using test set from language '{self.test_language}' already in training set.")
-            else:
-                print(f"Monolingual setup")
-        else:
-            print(f"Zero-shot setup: using test set from new language '{self.test_language}'.")
-
-        test_path = paths.data_dir / self.test_language
-        splits = os.listdir(test_path)
-        train, val, test = splits[3], splits[0], splits[1] 
-
-        print(f"Loading test data from: {test_path / test}")
-        self.test_data = pd.read_csv(test_path / test, sep="\t")
-
+        print(f"Loading test data from : {paths.data_dir / self.language / test}")
+        self.test_data = pd.read_csv(
+            paths.data_dir / self.language / test, sep="\t"
+        )
 
     def encode_data(self, data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -124,7 +108,7 @@ class IngestionPipeline:
 class TrainPipeline:
     def __init__(
         self,
-        language: list[str],
+        language: str,
         model: Any,
         data: Any = (None, None),
         batch_size: int = 128,
@@ -202,7 +186,6 @@ class TrainPipelineSklearn(TrainPipeline):
         model,
         data=None,
         model_hyperparams: dict | None = None,
-        param_distributions: dict | None = None,
         n_iter: int = 20,
         cv: int = 5,
         random_seed: int = 42,
@@ -214,8 +197,7 @@ class TrainPipelineSklearn(TrainPipeline):
                     
         self.train_scores = []
         self.val_scores = []
-        self.model_hyperparams = model_hyperparams or {}
-        self.param_distributions = param_distributions or {}
+        self.param_distributions = model_hyperparams or {}
         self.n_iter = n_iter
         self.cv = cv
         self.encoder = encoder
@@ -290,6 +272,7 @@ class TrainPipelineNN(TrainPipeline):
         random_seed: int = 42,
         encoder: Encoder = None,
         use_class_weights: bool = True,
+        device: torch.device = None,
     ):
         super().__init__(
             language, model, data, batch_size, random_seed=random_seed, use_class_weights=use_class_weights, encoder=encoder
@@ -305,6 +288,7 @@ class TrainPipelineNN(TrainPipeline):
         else:
             self.class_weights = None
         self.encoder = encoder
+        self.device = device
 
     def set_random_seeds(self):
         """Set random seeds for all relevant libraries."""
@@ -379,17 +363,16 @@ class TrainPipelineNN(TrainPipeline):
         return total_loss / len(self.val_loader)
 
     def train(self):
-        if torch.backends.mps.is_available():
-            self.device = torch.device("mps")
-        else:
-            self.device = torch.device("cpu")
-
         self.model.to(self.device)
 
         # Model hyperparams
-        epochs        = self.hyperparams.get("epochs",       10)
-        lr            = self.hyperparams.get("lr",       3e-4)
-        weight_decay  = self.hyperparams.get("weight_decay", 0.0)
+        epochs        = self.hyperparams.get("epochs",       100)
+        lr            = self.hyperparams.get("lr",       1e-3)
+        weight_decay  = self.hyperparams.get("weight_decay", 1e-4)
+        patience = self.hyperparams.get("patience", 15)
+        scheduler_patience = self.hyperparams.get("scheduler_patience", 5)
+        scheduler_factor = self.hyperparams.get("scheduler_factor", 0.5)
+        min_lr = self.hyperparams.get("min_lr", 1e-6)
 
         if self.class_weights is None:
             self.set_class_weights()
@@ -398,8 +381,21 @@ class TrainPipelineNN(TrainPipeline):
         )
         loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        
+        # Add learning rate scheduler
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=scheduler_factor,
+            patience=scheduler_patience,
+            min_lr=min_lr,
+            verbose=True
+        )
 
         print(f"Training running on: {self.device}")
+
+        best_val_loss = float('inf')
+        epochs_no_improve = 0
 
         for epoch in tqdm(range(epochs), desc="Training"):
             # Training phase
@@ -419,6 +415,9 @@ class TrainPipelineNN(TrainPipeline):
 
             # Validation phase
             val_loss = self.validate(loss_fn)
+            
+            # Update learning rate based on validation loss
+            scheduler.step(val_loss)
 
             # Store losses
             self.train_losses.append(train_loss / len(self.train_loader))
@@ -428,13 +427,26 @@ class TrainPipelineNN(TrainPipeline):
             print(f"\nEpoch {epoch+1}/{epochs}")
             print(f"Training Loss: {self.train_losses[-1]:.4f}")
             print(f"Validation Loss: {self.val_losses[-1]:.4f}")
+            print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.2e}")
 
             # Plot losses
             self.plot_losses()
 
+            # Early stopping check
+            if best_val_loss > val_loss:
+                best_val_loss = val_loss
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+
+            if epochs_no_improve >= patience:
+                print(f"\nEarly stopping at epoch {epoch+1}. No improvement in validation loss for {patience} epochs.")
+                break
+
         print("\nTraining completed!")
         print(f"Final Training Loss: {self.train_losses[-1]:.4f}")
         print(f"Final Validation Loss: {self.val_losses[-1]:.4f}")
+        print(f"Final Learning Rate: {optimizer.param_groups[0]['lr']:.2e}")
 
     def run(self):
         self.create_data_loaders()
@@ -446,15 +458,15 @@ class MasterPipeline:
         self,
         encoder: Encoder,
         classifier: Any,
-        language: list[str],
-        test_language: str,
+        language: str,
+        device: torch.device = None,
     ):
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.ingestion_pipeline = IngestionPipeline(language=language, encoder=encoder, test_language=test_language)
+        self.ingestion_pipeline = IngestionPipeline(language=language, encoder=encoder)
         self.language = language
-        self.test_language = test_language
         self.classifier = classifier
         self.encoder = encoder
+        self.device = device
 
     def run(self, save_run_info: bool = True):
         self.ingestion_pipeline.run()
@@ -463,6 +475,7 @@ class MasterPipeline:
             language=self.language,
             model=self.classifier,
             data=(self.ingestion_pipeline.train_data, self.ingestion_pipeline.val_data),
+            device=self.device,
         )
         self.training_pipeline.run()
         self.evaluation_pipeline = EvaluationPipelineNN(
@@ -470,14 +483,14 @@ class MasterPipeline:
             data=self.ingestion_pipeline.test_data,
             encoder =self.encoder,
             language=self.language,
+            device=self.device,
         )
         self.evaluation_pipeline.run()
         self.log_run()
 
     def log_run(self, save_run_info: bool = True):
         run_info = {
-            "training_languages": self.language,
-            "test_language": self.test_language,
+            "language": self.language,
             "encoder": self.encoder.get_params(),
             "classifier": self.training_pipeline.model.get_architecture(),
             "random_seed": self.training_pipeline.random_seed,
@@ -511,6 +524,7 @@ class EvaluationPipeline(ABC):
         language: str = "english",
         batch_size: int = 128,
         encoder: Encoder = None,
+        device: torch.device = None,
     ):
         self.model = model
         self.test_data = test_data
@@ -518,7 +532,6 @@ class EvaluationPipeline(ABC):
         self.batch_size = batch_size
         self.test_loader = None
         self.encoder = encoder
-
     def unpack_data(self):
         if self.test_data is None:
             # Unpack data from parquet files
@@ -569,15 +582,19 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
         }
     
     def plot_confusion_matrix(self, y_pred):
+        # 1) compute raw counts
         self.cm = confusion_matrix(self.y_test, y_pred)
 
+        # 2) create exactly one figure and keep a handle to it
         self.cm_figure = plt.figure(figsize=(6, 6))
         ax = self.cm_figure.add_subplot(1, 1, 1)
 
+        # 3) plot the matrix array, NOT the figure itself!
         im = ax.imshow(self.cm, interpolation='nearest', cmap=plt.cm.Blues)
         ax.set_title('Confusion Matrix')
         plt.colorbar(im, ax=ax)
 
+        # 4) label ticks
         labels = ['OBJ', 'SUBJ']
         tick_marks = np.arange(len(labels))
         ax.set_xticks(tick_marks)
@@ -588,6 +605,7 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
         ax.set_ylabel('True label')
         ax.set_xlabel('Predicted label')
 
+        # 5) annotate each cell with the count
         thresh = self.cm.max() / 2.0
         for i, j in itertools.product(range(self.cm.shape[0]), range(self.cm.shape[1])):
             color = "white" if self.cm[i, j] > thresh else "black"
@@ -602,14 +620,10 @@ class EvaluationPipelineSklearn(EvaluationPipeline):
 
 
 class EvaluationPipelineNN(EvaluationPipeline):
-    def __init__(self, model, data, language, encoder, random_seed: int = 42):
-        super().__init__(model, data, language, encoder=encoder)
-        if torch.backends.mps.is_available():
-            self.device = torch.device("mps")
-        else:
-            self.device = torch.device("cpu")
-        self.model.to(self.device)
+    def __init__(self, model, data, language, encoder, device, random_seed: int = 42):
+        super().__init__(model, data, language, encoder=encoder, device=device)
         self.random_seed = random_seed
+        self.device = device
 
     def create_data_loaders(self):
         self.split_data()
@@ -644,6 +658,7 @@ class EvaluationPipelineNN(EvaluationPipeline):
         return [1 if logit > 0.5 else 0 for logit in F.sigmoid(logits)]
 
     def evaluate_model(self):
+        self.model.to(self.device)
         self.model.eval()
         y_pred = []
 
@@ -676,22 +691,19 @@ class MasterPipelineSklearn:
         self,
         encoder: Encoder,
         classifier: Any,
-        language: list[str],
-        test_language: str,
+        language: str,
         model_hyperparams: dict | None = None,
-        param_distributions: dict | None = None,
+        device: torch.device = None,
     ):
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.encoder = encoder
         self.ingestion_pipeline = IngestionPipeline(
-            language=language, encoder=encoder , test_language=test_language
+            language=language, encoder=encoder
         )
         self.language = language
-        self.test_language = test_language
         self.classifier = classifier
         self.model_hyperparams = model_hyperparams
-        self.param_distributions = param_distributions 
-
+        
     def run(self, save_run_info: bool = True):
         self.ingestion_pipeline.run()
         self.training_pipeline = TrainPipelineSklearn(
@@ -699,7 +711,6 @@ class MasterPipelineSklearn:
             model=self.classifier,
             data=(self.ingestion_pipeline.train_data, self.ingestion_pipeline.val_data),
             model_hyperparams=self.model_hyperparams,
-            param_distributions=self.param_distributions,
         )
         self.training_pipeline.run()
         self.evaluation_pipeline = EvaluationPipelineSklearn(
@@ -710,15 +721,14 @@ class MasterPipelineSklearn:
         self.log_run()
 
     def log_run(self, save_run_info: bool = True):
-        chosen_hparams = {}
-        if self.training_pipeline.best_params_:
-            chosen_hparams = self.training_pipeline.best_params_
-        else:
-            chosen_hparams = self.training_pipeline.model_hyperparams
+        chosen_hparams = (
+            self.training_pipeline.best_params_
+            if getattr(self.training_pipeline, "best_params_", None)
+            else self.training_pipeline.model.get_params()
+        )
 
         run_info = {
-            "training_languages": self.language,
-            "test_language": self.test_language,
+            "language": self.language,
             "encoder": self.encoder.get_params(),
             "model_type": self.training_pipeline.model.__class__.__name__,
             "random_seed": self.training_pipeline.random_seed,
