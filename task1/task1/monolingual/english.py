@@ -24,8 +24,8 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    # encoder = SentenceTransformerEncoder(model_name="all-MiniLM-L6-v2")
-    encoder = Word2VecEncoder()
+    encoder = SentenceTransformerEncoder(model_name="all-MiniLM-L6-v2")
+    # encoder = Word2VecEncoder()
     #encoder = TfidfEncoder(max_features=10_000, ngram_range=(1,4))
     classifier = GRU(
         in_features=encoder.get_emb_dim(),

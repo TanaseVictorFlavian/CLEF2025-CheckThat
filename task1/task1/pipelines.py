@@ -69,7 +69,7 @@ class IngestionPipeline:
 
     def load_data(self):
         splits = os.listdir(paths.data_dir / self.language)
-        train, val, test = splits[3], splits[0], splits[1]
+        train, val, test = splits[5], splits[0], splits[3]
 
         print(f"Loading training data from : {paths.data_dir / self.language / train}")
         self.train_data = pd.read_csv(
